@@ -20,4 +20,7 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       - run: flutter build apk --debug
-      - uses: gitleaks/gitleaks-action@v2
+      - name: Secret scan
+        run: >-
+          docker run --rm -v "${PWD}:/repo" zricethezav/gitleaks:v8.28.0
+          detect --source=/repo --no-banner --redact --exit-code=1
