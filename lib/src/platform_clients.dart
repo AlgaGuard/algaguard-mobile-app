@@ -20,8 +20,7 @@ class TokenStore {
 
   // Keep credentials in secure storage; callers receive them only when needed.
   Future<String?> readAccessToken() => storage.read(key: 'oidc_access_token');
-  Future<String?> readRefreshToken() =>
-      storage.read(key: 'oidc_refresh_token');
+  Future<String?> readRefreshToken() => storage.read(key: 'oidc_refresh_token');
 
   Future<void> clear() async {
     await storage.delete(key: 'oidc_access_token');
