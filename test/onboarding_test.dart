@@ -14,11 +14,20 @@ class FakeBle implements BleProvisioner {
   }
 }
 
+class FailingBle implements BleProvisioner {
+  @override
+  Future<void> provision({
+    required String serviceId,
+    required String ssid,
+    required String password,
+  }) => Future<void>.error(StateError('wrong service UUID'));
+}
+
 void main() {
   final raw = jsonEncode({
     'schema': 'algaguard.device.setup',
     'schemaVersion': '1.0.0',
-    'deviceId': 'device',
+    'deviceId': 'AG-000001',
     'claimCode': 'one-time',
     'bootstrapUrl': 'https://api.example/bootstrap',
     'environment': 'development',
@@ -26,7 +35,7 @@ void main() {
     'expiresAt': '2030-01-01T00:00:00Z',
   });
   test('QR validation rejects forbidden extra fields and expiration', () {
-    expect(QrClaim.parse(raw, now: DateTime.utc(2029)).deviceId, 'device');
+    expect(QrClaim.parse(raw, now: DateTime.utc(2029)).deviceId, 'AG-000001');
     final unsafe = jsonEncode({
       ...jsonDecode(raw) as Map<String, dynamic>,
       'wifiPassword': 'secret',
@@ -49,4 +58,24 @@ void main() {
     );
     expect(controller.retainsPassword, false);
   });
+
+  test(
+    'Wi-Fi password is cleared after BLE failure and messages are bounded',
+    () async {
+      final controller = ProvisioningController(FailingBle());
+      await expectLater(
+        controller.provision(
+          QrClaim.parse(raw, now: DateTime.utc(2029)),
+          'ssid',
+          'password',
+        ),
+        throwsStateError,
+      );
+      expect(controller.retainsPassword, false);
+      expect(
+        () => BleProtocol.wifiCredentials('s' * 33, 'password'),
+        throwsFormatException,
+      );
+    },
+  );
 }
