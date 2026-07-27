@@ -76,25 +76,55 @@ class OidcClient {
 }
 
 class PlatformApi {
-  PlatformApi(Uri baseUrl)
-    : dio = Dio(
-        BaseOptions(
-          baseUrl: baseUrl.toString(),
-          connectTimeout: const Duration(seconds: 10),
-        ),
-      );
+  PlatformApi(Uri baseUrl, {Dio? client})
+    : dio =
+          client ??
+          Dio(
+            BaseOptions(
+              baseUrl: baseUrl.toString(),
+              connectTimeout: const Duration(seconds: 10),
+            ),
+          );
   final Dio dio;
-  Future<Map<String, dynamic>> claim(String code) async =>
-      Map<String, dynamic>.from(
-        (await dio.post<Object>('/claims', data: {'claimCode': code})).data!
-            as Map,
-      );
+  Future<ProvisioningSession> consumeClaim({
+    required String accessToken,
+    required String organizationId,
+    required QrClaim claim,
+  }) async {
+    final response = await dio.post<Object>(
+      '/claims/consume',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {
+        'organizationId': organizationId,
+        'deviceId': claim.deviceId,
+        'claimCode': claim.claimCode,
+      },
+    );
+    final root = Map<String, dynamic>.from(response.data! as Map);
+    final bootstrap = Map<String, dynamic>.from(root['bootstrap'] as Map);
+    if (root['device'] is! Map ||
+        bootstrap['deviceId'] != claim.deviceId ||
+        bootstrap['sessionId'] is! String ||
+        bootstrap['sessionToken'] is! String ||
+        bootstrap['expiresAt'] is! String) {
+      throw const FormatException('Invalid claim response');
+    }
+    return ProvisioningSession(
+      sessionId: bootstrap['sessionId'] as String,
+      deviceId: bootstrap['deviceId'] as String,
+      expiresAt: DateTime.parse(bootstrap['expiresAt'] as String).toUtc(),
+      sessionToken: bootstrap['sessionToken'] as String,
+    );
+  }
 }
 
 class FlutterBlueProvisioner implements BleProvisioner {
   @override
   Future<void> provision({
     required String serviceId,
+    required String sessionId,
+    required String deviceId,
+    required String sessionToken,
     required String ssid,
     required String password,
   }) async {
@@ -127,10 +157,34 @@ class FlutterBlueProvisioner implements BleProvisioner {
       if (characteristic == null) {
         throw StateError('No writable AlgaGuard provisioning characteristic');
       }
+      if (!characteristic.properties.notify) {
+        throw StateError(
+          'AlgaGuard provisioning acknowledgement is unavailable',
+        );
+      }
+      final acknowledgement = characteristic.lastValueStream
+          .map((bytes) => utf8.decode(bytes))
+          .firstWhere((raw) {
+            final value = jsonDecode(raw) as Map<String, dynamic>;
+            return value['schema'] ==
+                    'urn:algaguard:schema:onboarding:ble-provisioning-result:v1' &&
+                value['sessionId'] == sessionId &&
+                value['deviceId'] == deviceId &&
+                value['status'] == 'ACCEPTED';
+          })
+          .timeout(const Duration(seconds: 15));
+      await characteristic.setNotifyValue(true);
       await characteristic.write(
-        BleProtocol.wifiCredentials(ssid, password),
+        BleProtocol.provisioningRequest(
+          sessionId: sessionId,
+          deviceId: deviceId,
+          sessionToken: sessionToken,
+          ssid: ssid,
+          password: password,
+        ),
         withoutResponse: characteristic.properties.writeWithoutResponse,
       );
+      await acknowledgement;
     } finally {
       await device.disconnect();
     }

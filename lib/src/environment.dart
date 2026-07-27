@@ -8,6 +8,7 @@ class AppEnvironment {
     required this.keycloakIssuer,
     required this.keycloakClientId,
     required this.redirectUri,
+    required this.organizationId,
   });
   final EnvironmentFlavor flavor;
   final Uri apiBaseUrl;
@@ -15,6 +16,7 @@ class AppEnvironment {
   final Uri keycloakIssuer;
   final String keycloakClientId;
   final String redirectUri;
+  final String organizationId;
   static AppEnvironment fromDefines() => AppEnvironment(
     flavor: EnvironmentFlavor.values.byName(
       const String.fromEnvironment('FLAVOR', defaultValue: 'development'),
@@ -44,6 +46,10 @@ class AppEnvironment {
     redirectUri: const String.fromEnvironment(
       'OIDC_REDIRECT_URI',
       defaultValue: 'com.algaguard.mobile:/oauthredirect',
+    ),
+    organizationId: const String.fromEnvironment(
+      'ORGANIZATION_ID',
+      defaultValue: '10000000-0000-4000-8000-000000000001',
     ),
   );
 }

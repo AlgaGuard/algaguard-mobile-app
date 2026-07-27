@@ -305,13 +305,21 @@ class _ClaimScreenState extends ConsumerState<ClaimScreen> {
       _error = null;
     });
     try {
-      await PlatformApi(
-        widget.claim.bootstrapUrl,
-      ).claim(widget.claim.claimCode);
+      final environment = ref.read(environmentProvider);
+      final token = await const TokenStore(
+        FlutterSecureStorage(),
+      ).readAccessToken();
+      if (token == null) throw StateError('Sign in is required');
+      final session = await PlatformApi(environment.apiBaseUrl).consumeClaim(
+        accessToken: token,
+        organizationId: environment.organizationId,
+        claim: widget.claim,
+      );
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute<void>(
-            builder: (_) => BleProvisioningScreen(claim: widget.claim),
+            builder: (_) =>
+                BleProvisioningScreen(claim: widget.claim, session: session),
           ),
         );
       }
@@ -357,8 +365,13 @@ class _ClaimScreenState extends ConsumerState<ClaimScreen> {
 }
 
 class BleProvisioningScreen extends StatefulWidget {
-  const BleProvisioningScreen({super.key, required this.claim});
+  const BleProvisioningScreen({
+    super.key,
+    required this.claim,
+    required this.session,
+  });
   final QrClaim claim;
+  final ProvisioningSession session;
   @override
   State<BleProvisioningScreen> createState() => _BleProvisioningScreenState();
 }
@@ -375,7 +388,12 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
     });
     final controller = ProvisioningController(FlutterBlueProvisioner());
     try {
-      await controller.provision(widget.claim, _ssid.text, _password.text);
+      await controller.provision(
+        widget.claim,
+        widget.session,
+        _ssid.text,
+        _password.text,
+      );
       if (mounted) {
         setState(
           () => _state =
@@ -397,6 +415,7 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
 
   @override
   void dispose() {
+    widget.session.clear();
     _ssid.dispose();
     _password.clear();
     _password.dispose();
