@@ -10,6 +10,31 @@ enum ProvisioningStage {
   failed,
 }
 
+class ProvisioningSession {
+  ProvisioningSession({
+    required this.sessionId,
+    required this.deviceId,
+    required this.expiresAt,
+    required String sessionToken,
+  }) : _sessionToken = sessionToken;
+  final String sessionId;
+  final String deviceId;
+  final DateTime expiresAt;
+  String? _sessionToken;
+  bool get isExpired => !expiresAt.isAfter(DateTime.now().toUtc());
+  String takeToken() {
+    final value = _sessionToken;
+    if (value == null || isExpired) {
+      clear();
+      throw const FormatException('Provisioning session is unavailable');
+    }
+    return value;
+  }
+
+  void clear() => _sessionToken = null;
+  bool get retainsToken => _sessionToken != null;
+}
+
 class QrClaim {
   const QrClaim({
     required this.deviceId,
@@ -69,6 +94,9 @@ class QrClaim {
 abstract interface class BleProvisioner {
   Future<void> provision({
     required String serviceId,
+    required String sessionId,
+    required String deviceId,
+    required String sessionToken,
     required String ssid,
     required String password,
   });
@@ -79,7 +107,13 @@ class BleProtocol {
   static const version = '1.0.0';
   static const maxMessageBytes = 1024;
 
-  static List<int> wifiCredentials(String ssid, String password) {
+  static List<int> provisioningRequest({
+    required String sessionId,
+    required String deviceId,
+    required String sessionToken,
+    required String ssid,
+    required String password,
+  }) {
     if (ssid.isEmpty || ssid.length > 32 || password.length > 63) {
       throw const FormatException(
         'Wi-Fi credentials exceed provisioning bounds',
@@ -87,9 +121,11 @@ class BleProtocol {
     }
     final value = utf8.encode(
       jsonEncode({
-        'schema': schema,
+        'schema': 'urn:algaguard:schema:onboarding:ble-provisioning-request:v1',
         'schemaVersion': version,
-        'type': 'WIFI_CREDENTIALS',
+        'sessionId': sessionId,
+        'deviceId': deviceId,
+        'sessionToken': sessionToken,
         'ssid': ssid,
         'password': password,
       }),
@@ -99,6 +135,15 @@ class BleProtocol {
     }
     return value;
   }
+
+  static List<int> wifiCredentials(String ssid, String password) =>
+      provisioningRequest(
+        sessionId: '00000000-0000-4000-8000-000000000000',
+        deviceId: 'AG-000000',
+        sessionToken: 'x' * 32,
+        ssid: ssid,
+        password: password,
+      );
 
   static void validateIncoming(String raw, {String? expectedType}) {
     if (utf8.encode(raw).length > maxMessageBytes) {
@@ -117,14 +162,34 @@ class ProvisioningController {
   ProvisioningController(this.ble);
   final BleProvisioner ble;
   String? _password;
+  ProvisioningSession? _session;
   ProvisioningStage stage = ProvisioningStage.connecting;
   bool get retainsPassword => _password != null;
-  Future<void> provision(QrClaim claim, String ssid, String password) async {
+  bool get retainsSessionToken => _session?.retainsToken ?? false;
+  void clear() {
+    _password = null;
+    _session?.clear();
+    _session = null;
+  }
+
+  Future<void> provision(
+    QrClaim claim,
+    ProvisioningSession session,
+    String ssid,
+    String password,
+  ) async {
+    if (session.deviceId != claim.deviceId) {
+      throw const FormatException('Claimed device mismatch');
+    }
+    _session = session;
     _password = password;
     try {
       stage = ProvisioningStage.sendingCredentials;
       await ble.provision(
         serviceId: claim.bleServiceId,
+        sessionId: session.sessionId,
+        deviceId: session.deviceId,
+        sessionToken: session.takeToken(),
         ssid: ssid,
         password: _password!,
       );
@@ -133,7 +198,7 @@ class ProvisioningController {
       stage = ProvisioningStage.failed;
       rethrow;
     } finally {
-      _password = null;
+      clear();
     }
   }
 }
