@@ -40,10 +40,22 @@ class SplashScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
     body: Center(
-      child: FilledButton.icon(
-        icon: const Icon(Icons.eco),
-        label: const Text('Start AlgaGuard'),
-        onPressed: () => Navigator.of(context).pushReplacementNamed('/login'),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Image.asset(
+            'assets/brand/algaguard-logo.png',
+            width: 180,
+            semanticLabel: 'AlgaGuard shield logo',
+          ),
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            icon: const Icon(Icons.eco),
+            label: const Text('Start AlgaGuard'),
+            onPressed: () =>
+                Navigator.of(context).pushReplacementNamed('/login'),
+          ),
+        ],
       ),
     ),
   );
@@ -90,6 +102,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Center(
+            child: Image.asset(
+              'assets/brand/algaguard-logo.png',
+              width: 132,
+              semanticLabel: 'AlgaGuard shield logo',
+            ),
+          ),
+          const SizedBox(height: 20),
           const Text(
             'Use the configured Keycloak account. Tokens are stored only in platform secure storage.',
           ),
