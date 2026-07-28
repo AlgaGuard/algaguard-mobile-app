@@ -19,7 +19,13 @@ jobs:
       - run: dart format --output=none --set-exit-if-changed .
       - run: flutter analyze
       - run: flutter test
-      - run: flutter build apk --debug
+      - name: Build cloud-configured debug APK
+        run: >-
+          flutter build apk --debug
+          --dart-define=FLAVOR=development
+          --dart-define=API_BASE_URL=https://api.algaguard.bosilu.dev/v1
+          --dart-define=WEBSOCKET_URL=wss://realtime.algaguard.bosilu.dev
+          --dart-define=KEYCLOAK_ISSUER=https://auth.algaguard.bosilu.dev/realms/algaguard
       - name: Secret scan
         run: >-
           docker run --rm -v "${PWD}:/repo" zricethezav/gitleaks:v8.28.0

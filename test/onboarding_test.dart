@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:algaguard_mobile_app/src/ble_provisioning_wire.dart';
 import 'package:algaguard_mobile_app/src/onboarding.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -13,6 +14,7 @@ class FakeBle implements BleProvisioner {
     required String sessionToken,
     required String ssid,
     required String password,
+    void Function(SafeProvisioningStatus status)? onStatus,
   }) async {
     receivedPassword = password;
     receivedSessionToken = sessionToken;
@@ -28,6 +30,7 @@ class FailingBle implements BleProvisioner {
     required String sessionToken,
     required String ssid,
     required String password,
+    void Function(SafeProvisioningStatus status)? onStatus,
   }) => Future<void>.error(StateError('wrong service UUID'));
 }
 

@@ -1,8 +1,14 @@
 import 'dart:convert';
 
+import 'ble_provisioning_wire.dart';
+
 enum ProvisioningStage {
   connecting,
+  discoveringService,
+  subscribingStatus,
   sendingCredentials,
+  receiving,
+  validating,
   joiningWifi,
   requestingCertificate,
   connectingCloud,
@@ -99,6 +105,7 @@ abstract interface class BleProvisioner {
     required String sessionToken,
     required String ssid,
     required String password,
+    void Function(SafeProvisioningStatus status)? onStatus,
   });
 }
 
@@ -114,26 +121,17 @@ class BleProtocol {
     required String ssid,
     required String password,
   }) {
-    if (ssid.isEmpty || ssid.length > 32 || password.length > 63) {
-      throw const FormatException(
-        'Wi-Fi credentials exceed provisioning bounds',
+    try {
+      return BleProvisioningWire.canonicalPayload(
+        sessionId: sessionId,
+        deviceId: deviceId,
+        sessionToken: sessionToken,
+        ssid: ssid,
+        password: password,
       );
+    } on BleProvisioningWireException catch (_) {
+      throw const FormatException('BLE provisioning request is invalid');
     }
-    final value = utf8.encode(
-      jsonEncode({
-        'schema': 'urn:algaguard:schema:onboarding:ble-provisioning-request:v1',
-        'schemaVersion': version,
-        'sessionId': sessionId,
-        'deviceId': deviceId,
-        'sessionToken': sessionToken,
-        'ssid': ssid,
-        'password': password,
-      }),
-    );
-    if (value.length > maxMessageBytes) {
-      throw const FormatException('BLE provisioning message is too large');
-    }
-    return value;
   }
 
   static List<int> wifiCredentials(String ssid, String password) =>
@@ -176,8 +174,9 @@ class ProvisioningController {
     QrClaim claim,
     ProvisioningSession session,
     String ssid,
-    String password,
-  ) async {
+    String password, {
+    void Function(SafeProvisioningStatus status)? onStatus,
+  }) async {
     if (session.deviceId != claim.deviceId) {
       throw const FormatException('Claimed device mismatch');
     }
@@ -192,6 +191,7 @@ class ProvisioningController {
         sessionToken: session.takeToken(),
         ssid: ssid,
         password: _password!,
+        onStatus: onStatus,
       );
       stage = ProvisioningStage.completed;
     } catch (_) {

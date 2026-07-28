@@ -1,6 +1,9 @@
 import 'package:algaguard_mobile_app/src/environment.dart';
 import 'package:algaguard_mobile_app/src/onboarding.dart';
+import 'package:algaguard_mobile_app/src/physical_session_handoff.dart';
+import 'package:algaguard_mobile_app/src/secure_transport_preflight.dart';
 import 'package:algaguard_mobile_app/src/platform_clients.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -31,6 +34,12 @@ class AlgaGuardApp extends ConsumerWidget {
       '/device': (_) => const DeviceDetailsScreen(),
       '/ota': (_) => const OtaScreen(),
       '/account': (_) => const AccountScreen(),
+      if (secureTransportPreflightAvailable())
+        '/secure-transport': (_) => SecureTransportPreflightScreen(
+          controller: SecureTransportPreflightController(
+            PlatformApi(ref.read(environmentProvider).apiBaseUrl),
+          ),
+        ),
     },
   );
 }
@@ -310,7 +319,8 @@ class _ClaimScreenState extends ConsumerState<ClaimScreen> {
         FlutterSecureStorage(),
       ).readAccessToken();
       if (token == null) throw StateError('Sign in is required');
-      final session = await PlatformApi(environment.apiBaseUrl).consumeClaim(
+      final api = PlatformApi(environment.apiBaseUrl);
+      final session = await api.consumeClaim(
         accessToken: token,
         organizationId: environment.organizationId,
         claim: widget.claim,
@@ -319,7 +329,16 @@ class _ClaimScreenState extends ConsumerState<ClaimScreen> {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute<void>(
             builder: (_) =>
-                BleProvisioningScreen(claim: widget.claim, session: session),
+                physicalSessionApprovalAvailable(releaseMode: kReleaseMode)
+                ? PhysicalSessionApprovalScreen(
+                    controller: PhysicalSessionApprovalController(
+                      api: api,
+                      accessToken: token,
+                      session: session,
+                      enabled: true,
+                    ),
+                  )
+                : BleProvisioningScreen(claim: widget.claim, session: session),
           ),
         );
       }
@@ -393,11 +412,14 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
         widget.session,
         _ssid.text,
         _password.text,
+        onStatus: (status) {
+          if (mounted) setState(() => _state = status.uiText);
+        },
       );
       if (mounted) {
         setState(
-          () => _state =
-              'Credentials sent. Device will join Wi-Fi, request its certificate, and connect to cloud.',
+          () =>
+              _state = 'Accepted by device. Waiting for device network status.',
         );
       }
     } catch (_) {

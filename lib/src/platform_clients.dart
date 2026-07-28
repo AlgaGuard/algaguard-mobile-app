@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_appauth/flutter_appauth.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'ble_provisioning_wire.dart';
 import 'environment.dart';
 import 'onboarding.dart';
 
@@ -116,9 +118,55 @@ class PlatformApi {
       sessionToken: bootstrap['sessionToken'] as String,
     );
   }
+
+  /// Development-only approval. Callers must keep the supplied session in RAM
+  /// and must not log or persist the request body.
+  Future<void> approvePhysicalSessionHandoff({
+    required String accessToken,
+    required String userCode,
+    required ProvisioningSession session,
+  }) async {
+    final normalizedCode = userCode.toUpperCase().replaceAll(
+      RegExp(r'[ -]'),
+      '',
+    );
+    if (!RegExp(r'^[A-HJ-NP-Z2-9]{6,16}$').hasMatch(normalizedCode) ||
+        session.isExpired) {
+      throw const FormatException('HANDOFF_APPROVAL_UNAVAILABLE');
+    }
+    await dio.post<void>(
+      '/development/physical-session-handoffs/approve',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {
+        'protocolVersion': 1,
+        'userCode': normalizedCode,
+        'sessionId': session.sessionId,
+        'deviceId': session.deviceId,
+        'sessionToken': session.takeToken(),
+      },
+    );
+  }
+
+  Future<bool> secureTransportHealthPreflight() async {
+    final response = await dio.get<void>(
+      '/health',
+      options: Options(
+        sendTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 8),
+        followRedirects: false,
+      ),
+    );
+    return response.statusCode == 200;
+  }
 }
 
 class FlutterBlueProvisioner implements BleProvisioner {
+  FlutterBlueProvisioner({Random? random})
+    : _random = random ?? Random.secure();
+
+  final Random _random;
+  final Set<int> _usedMessageIds = <int>{};
+
   @override
   Future<void> provision({
     required String serviceId,
@@ -127,8 +175,12 @@ class FlutterBlueProvisioner implements BleProvisioner {
     required String sessionToken,
     required String ssid,
     required String password,
+    void Function(SafeProvisioningStatus status)? onStatus,
   }) async {
-    final serviceGuid = Guid(serviceId);
+    if (serviceId.toLowerCase() != bleProvisioningServiceUuid) {
+      throw const BleProvisioningWireException('SERVICE_NOT_FOUND');
+    }
+    final serviceGuid = Guid(bleProvisioningServiceUuid);
     await FlutterBluePlus.startScan(
       withServices: [serviceGuid],
       timeout: const Duration(seconds: 15),
@@ -136,58 +188,151 @@ class FlutterBlueProvisioner implements BleProvisioner {
     final results = await FlutterBluePlus.scanResults
         .where((items) => items.isNotEmpty)
         .first;
-    final device = results
-        .firstWhere(
-          (result) =>
-              result.advertisementData.serviceUuids.contains(serviceGuid),
-        )
-        .device;
+    final matchingResults = results.where(
+      (result) => result.advertisementData.serviceUuids.contains(serviceGuid),
+    );
+    if (matchingResults.isEmpty) {
+      throw const BleProvisioningWireException('SERVICE_NOT_FOUND');
+    }
+    final device = matchingResults.first.device;
     await FlutterBluePlus.stopScan();
     await device.connect(timeout: const Duration(seconds: 15));
+
+    StreamSubscription<List<int>>? statusSubscription;
+    StreamSubscription<BluetoothConnectionState>? connectionSubscription;
+    BluetoothCharacteristic? statusCharacteristic;
+    final ready = Completer<void>();
+    final terminal = Completer<SafeProvisioningStatus>();
+    var latestStatus = const SafeProvisioningStatus(
+      SafeProvisioningState.cancelled,
+      'DISCONNECTED',
+    );
+    var payload = <int>[];
+    var frames = <List<int>>[];
+    SequentialFrameWriter? writer;
     try {
       final services = await device.discoverServices();
-      final characteristic = services
-          .expand((service) => service.characteristics)
-          .where(
-            (item) =>
-                item.properties.write || item.properties.writeWithoutResponse,
+      final contractServices = services
+          .map(
+            (service) => BleServiceContract(
+              uuid: service.uuid.toString(),
+              characteristics: service.characteristics
+                  .map(
+                    (characteristic) => BleCharacteristicContract(
+                      uuid: characteristic.uuid.toString(),
+                      canRead: characteristic.properties.read,
+                      canWriteWithResponse: characteristic.properties.write,
+                      canWriteWithoutResponse:
+                          characteristic.properties.writeWithoutResponse,
+                      canNotify: characteristic.properties.notify,
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
           )
-          .cast<BluetoothCharacteristic?>()
-          .firstWhere((item) => item != null, orElse: () => null);
-      if (characteristic == null) {
-        throw StateError('No writable AlgaGuard provisioning characteristic');
-      }
-      if (!characteristic.properties.notify) {
-        throw StateError(
-          'AlgaGuard provisioning acknowledgement is unavailable',
-        );
-      }
-      final acknowledgement = characteristic.lastValueStream
-          .map((bytes) => utf8.decode(bytes))
-          .firstWhere((raw) {
-            final value = jsonDecode(raw) as Map<String, dynamic>;
-            return value['schema'] ==
-                    'urn:algaguard:schema:onboarding:ble-provisioning-result:v1' &&
-                value['sessionId'] == sessionId &&
-                value['deviceId'] == deviceId &&
-                value['status'] == 'ACCEPTED';
-          })
-          .timeout(const Duration(seconds: 15));
-      await characteristic.setNotifyValue(true);
-      await characteristic.write(
-        BleProtocol.provisioningRequest(
-          sessionId: sessionId,
-          deviceId: deviceId,
-          sessionToken: sessionToken,
-          ssid: ssid,
-          password: password,
-        ),
-        withoutResponse: characteristic.properties.writeWithoutResponse,
+          .toList(growable: false);
+      BleProvisioningWire.selectCharacteristics(contractServices);
+      final service = services.firstWhere(
+        (candidate) =>
+            candidate.uuid.toString().toLowerCase() ==
+            bleProvisioningServiceUuid,
       );
-      await acknowledgement;
+      final request = service.characteristics.firstWhere(
+        (candidate) =>
+            candidate.uuid.toString().toLowerCase() ==
+            bleProvisioningRequestUuid,
+      );
+      statusCharacteristic = service.characteristics.firstWhere(
+        (candidate) =>
+            candidate.uuid.toString().toLowerCase() ==
+            bleProvisioningStatusUuid,
+      );
+
+      void observeStatus(List<int> bytes) {
+        try {
+          latestStatus = BleProvisioningWire.decodeSafeStatus(bytes);
+          onStatus?.call(latestStatus);
+          if (latestStatus.state == SafeProvisioningState.ready &&
+              !ready.isCompleted) {
+            ready.complete();
+          }
+          if (latestStatus.isTerminal && !terminal.isCompleted) {
+            terminal.complete(latestStatus);
+          }
+        } on BleProvisioningWireException catch (error, stackTrace) {
+          if (!ready.isCompleted) ready.completeError(error, stackTrace);
+          if (!terminal.isCompleted) terminal.completeError(error, stackTrace);
+        }
+      }
+
+      statusSubscription = statusCharacteristic.lastValueStream.listen(
+        observeStatus,
+      );
+      connectionSubscription = device.connectionState.listen((connectionState) {
+        if (connectionState == BluetoothConnectionState.disconnected) {
+          final disconnected = const SafeProvisioningStatus(
+            SafeProvisioningState.cancelled,
+            'DISCONNECTED',
+          );
+          onStatus?.call(disconnected);
+          if (!ready.isCompleted) {
+            ready.completeError(
+              const BleProvisioningWireException('DISCONNECTED'),
+            );
+          }
+          if (!terminal.isCompleted) {
+            terminal.complete(disconnected);
+          }
+        }
+      });
+      await statusCharacteristic.setNotifyValue(true);
+      observeStatus(await statusCharacteristic.read());
+      if (latestStatus.state != SafeProvisioningState.ready) {
+        await ready.future.timeout(const Duration(seconds: 15));
+      }
+
+      payload = BleProtocol.provisioningRequest(
+        sessionId: sessionId,
+        deviceId: deviceId,
+        sessionToken: sessionToken,
+        ssid: ssid,
+        password: password,
+      );
+      frames = BleProvisioningWire.framePayload(payload, _nextMessageId());
+      writer = SequentialFrameWriter(frames);
+      while (writer.hasPending) {
+        final frame = writer.current;
+        await request
+            .write(frame, withoutResponse: false)
+            .timeout(const Duration(seconds: 15));
+        writer.acknowledgeWrite();
+      }
+      final completion = await terminal.future.timeout(
+        const Duration(seconds: 30),
+      );
+      if (!completion.isAccepted) {
+        throw BleProvisioningWireException(completion.reason);
+      }
     } finally {
+      writer?.clear();
+      payload.fillRange(0, payload.length, 0);
+      await statusSubscription?.cancel();
+      await connectionSubscription?.cancel();
+      try {
+        await statusCharacteristic?.setNotifyValue(false);
+      } catch (_) {
+        // Disconnect is still required; status cleanup errors carry no secret data.
+      }
       await device.disconnect();
     }
+  }
+
+  int _nextMessageId() {
+    for (var attempts = 0; attempts < 32; attempts++) {
+      final messageId = _random.nextInt(0x7fffffff) + 1;
+      if (_usedMessageIds.add(messageId)) return messageId;
+    }
+    throw const BleProvisioningWireException('MESSAGE_ID_UNAVAILABLE');
   }
 }
 
