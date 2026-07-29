@@ -13,29 +13,89 @@ import 'onboarding.dart';
 class TokenStore {
   const TokenStore(this.storage);
   final FlutterSecureStorage storage;
+  static const _accessTokenKey = 'oidc_access_token';
+  static const _refreshTokenKey = 'oidc_refresh_token';
+  static const _selectedOrganizationKey = 'selected_organization_id';
+
   Future<void> save({required String accessToken, String? refreshToken}) async {
-    await storage.write(key: 'oidc_access_token', value: accessToken);
+    await storage.write(key: _accessTokenKey, value: accessToken);
     if (refreshToken != null) {
-      await storage.write(key: 'oidc_refresh_token', value: refreshToken);
+      await storage.write(key: _refreshTokenKey, value: refreshToken);
     }
   }
 
   // Keep credentials in secure storage; callers receive them only when needed.
-  Future<String?> readAccessToken() => storage.read(key: 'oidc_access_token');
-  Future<String?> readRefreshToken() => storage.read(key: 'oidc_refresh_token');
+  Future<String?> readAccessToken() => storage.read(key: _accessTokenKey);
+  Future<String?> readRefreshToken() => storage.read(key: _refreshTokenKey);
+
+  Future<void> selectOrganization(String organizationId) async {
+    if (!RegExp(
+      r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+      caseSensitive: false,
+    ).hasMatch(organizationId)) {
+      throw const FormatException('Invalid organization identifier');
+    }
+    await storage.write(key: _selectedOrganizationKey, value: organizationId);
+  }
+
+  Future<String?> readSelectedOrganization() =>
+      storage.read(key: _selectedOrganizationKey);
 
   Future<void> clear() async {
-    await storage.delete(key: 'oidc_access_token');
-    await storage.delete(key: 'oidc_refresh_token');
+    await storage.delete(key: _accessTokenKey);
+    await storage.delete(key: _refreshTokenKey);
+    await storage.delete(key: _selectedOrganizationKey);
   }
 }
 
+class OidcUserProfile {
+  const OidcUserProfile({
+    required this.displayName,
+    required this.username,
+    required this.email,
+  });
+
+  factory OidcUserProfile.fromJson(Map<String, dynamic> value) {
+    String? bounded(String key, int maximum) {
+      final field = value[key];
+      if (field is! String || field.trim().isEmpty || field.length > maximum) {
+        return null;
+      }
+      return field.trim();
+    }
+
+    final profile = OidcUserProfile(
+      displayName: bounded('name', 200),
+      username: bounded('preferred_username', 128),
+      email: bounded('email', 254),
+    );
+    if (profile.displayName == null &&
+        profile.username == null &&
+        profile.email == null) {
+      throw const FormatException('Account profile is unavailable');
+    }
+    return profile;
+  }
+
+  final String? displayName;
+  final String? username;
+  final String? email;
+  String get primaryLabel =>
+      displayName ?? username ?? email ?? 'Signed-in account';
+}
+
 class OidcClient {
-  OidcClient(this.environment, this.store, {FlutterAppAuth? appAuth})
-    : _appAuth = appAuth ?? FlutterAppAuth();
+  OidcClient(
+    this.environment,
+    this.store, {
+    FlutterAppAuth? appAuth,
+    Dio? httpClient,
+  }) : _appAuth = appAuth ?? FlutterAppAuth(),
+       _httpClient = httpClient ?? Dio();
   final AppEnvironment environment;
   final TokenStore store;
   final FlutterAppAuth _appAuth;
+  final Dio _httpClient;
 
   Future<void> login() async {
     final response = await _appAuth.authorizeAndExchangeCode(
@@ -44,6 +104,7 @@ class OidcClient {
         environment.redirectUri,
         issuer: environment.keycloakIssuer.toString(),
         scopes: const ['openid', 'profile', 'email', 'offline_access'],
+        promptValues: const ['select_account'],
       ),
     );
     if (response.accessToken == null) {
@@ -74,7 +135,71 @@ class OidcClient {
     return response.accessToken;
   }
 
+  Future<OidcUserProfile> profile() async {
+    final accessToken = await store.readAccessToken();
+    if (accessToken == null) throw StateError('Sign in is required');
+    final endpoint = Uri.parse(
+      '${environment.keycloakIssuer}/protocol/openid-connect/userinfo',
+    );
+    final response = await _httpClient.get<Object>(
+      endpoint.toString(),
+      options: Options(
+        headers: {'Authorization': 'Bearer $accessToken'},
+        followRedirects: false,
+        sendTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 8),
+      ),
+    );
+    if (response.statusCode != 200 || response.data is! Map) {
+      throw StateError('Account profile is unavailable');
+    }
+    return OidcUserProfile.fromJson(
+      Map<String, dynamic>.from(response.data! as Map),
+    );
+  }
+
   Future<void> logout() => store.clear();
+}
+
+class OrganizationSummary {
+  const OrganizationSummary({
+    required this.id,
+    required this.name,
+    this.currentUserRole,
+  });
+
+  factory OrganizationSummary.fromJson(Map<String, dynamic> value) {
+    final id = value['id'];
+    final name = value['name'];
+    final role = value['currentUserRole'];
+    if (id is! String ||
+        !RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        ).hasMatch(id) ||
+        name is! String ||
+        name.trim().isEmpty ||
+        name.length > 120 ||
+        (role != null &&
+            (role is! String ||
+                !const {
+                  'OWNER',
+                  'ADMIN',
+                  'OPERATOR',
+                  'VIEWER',
+                }.contains(role)))) {
+      throw const FormatException('Invalid organization response');
+    }
+    return OrganizationSummary(
+      id: id,
+      name: name.trim(),
+      currentUserRole: role as String?,
+    );
+  }
+
+  final String id;
+  final String name;
+  final String? currentUserRole;
 }
 
 class PlatformApi {
@@ -88,6 +213,52 @@ class PlatformApi {
             ),
           );
   final Dio dio;
+
+  Future<List<OrganizationSummary>> listOrganizations({
+    required String accessToken,
+  }) async {
+    final response = await dio.get<Object>(
+      '/services/access/organizations',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    if (response.statusCode != 200 || response.data is! Map) {
+      throw StateError('Organizations are unavailable');
+    }
+    final root = Map<String, dynamic>.from(response.data! as Map);
+    final items = root['items'];
+    if (items is! List || items.length > 100) {
+      throw const FormatException('Invalid organizations response');
+    }
+    return items
+        .map(
+          (item) => OrganizationSummary.fromJson(
+            Map<String, dynamic>.from(item as Map),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<OrganizationSummary> createOrganization({
+    required String accessToken,
+    required String name,
+  }) async {
+    final normalizedName = name.trim();
+    if (normalizedName.isEmpty || normalizedName.length > 120) {
+      throw const FormatException('Invalid organization name');
+    }
+    final response = await dio.post<Object>(
+      '/services/access/organizations',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {'name': normalizedName},
+    );
+    if (response.statusCode != 201 || response.data is! Map) {
+      throw StateError('Organization was not created');
+    }
+    return OrganizationSummary.fromJson(
+      Map<String, dynamic>.from(response.data! as Map),
+    );
+  }
+
   Future<ProvisioningSession> consumeClaim({
     required String accessToken,
     required String organizationId,

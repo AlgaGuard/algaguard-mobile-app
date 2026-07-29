@@ -124,30 +124,175 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   );
 }
 
-class OrganizationScreen extends StatelessWidget {
+class OrganizationScreen extends ConsumerStatefulWidget {
   const OrganizationScreen({super.key});
+
+  @override
+  ConsumerState<OrganizationScreen> createState() => _OrganizationScreenState();
+}
+
+class _OrganizationScreenState extends ConsumerState<OrganizationScreen> {
+  final _store = const TokenStore(FlutterSecureStorage());
+  List<OrganizationSummary> _organizations = const [];
+  OidcUserProfile? _profile;
+  bool _loading = true;
+  bool _creating = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final environment = ref.read(environmentProvider);
+      final token = await _store.readAccessToken();
+      if (token == null) throw StateError('Sign in is required');
+      final results = await Future.wait<Object>([
+        OidcClient(environment, _store).profile(),
+        PlatformApi(
+          environment.apiBaseUrl,
+        ).listOrganizations(accessToken: token),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _profile = results[0] as OidcUserProfile;
+        _organizations = results[1] as List<OrganizationSummary>;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Account or organizations could not be loaded securely.';
+      });
+    }
+  }
+
+  Future<void> _createOrganization() async {
+    var proposedName = '';
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create organization'),
+        content: TextField(
+          autofocus: true,
+          maxLength: 120,
+          onChanged: (value) => proposedName = value,
+          onSubmitted: (value) => Navigator.pop(context, value),
+          decoration: const InputDecoration(labelText: 'Organization name'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, proposedName),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    setState(() {
+      _creating = true;
+      _error = null;
+    });
+    try {
+      final environment = ref.read(environmentProvider);
+      final token = await _store.readAccessToken();
+      if (token == null) throw StateError('Sign in is required');
+      final created = await PlatformApi(
+        environment.apiBaseUrl,
+      ).createOrganization(accessToken: token, name: name);
+      if (!mounted) return;
+      setState(() {
+        _organizations = [..._organizations, created];
+        _creating = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _creating = false;
+        _error = 'Organization could not be created.';
+      });
+    }
+  }
+
+  Future<void> _select(OrganizationSummary organization) async {
+    await _store.selectOrganization(organization.id);
+    if (mounted) Navigator.of(context).pushReplacementNamed('/home');
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Select organization')),
+    appBar: AppBar(
+      title: const Text('Select organization'),
+      actions: [
+        IconButton(
+          tooltip: 'Account',
+          onPressed: () => Navigator.of(context).pushNamed('/account'),
+          icon: const Icon(Icons.account_circle),
+        ),
+      ],
+    ),
     body: ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const Card(
-          child: ListTile(
-            title: Text('Development organization'),
-            subtitle: Text(
-              'Only authorized organizations returned by HTTPS may be selected.',
+        if (_profile != null)
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.verified_user_outlined),
+              title: Text(_profile!.primaryLabel),
+              subtitle: _profile!.email == null
+                  ? const Text('Signed in with Keycloak')
+                  : Text(_profile!.email!),
             ),
           ),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pushReplacementNamed('/home'),
-          child: const Text('Continue to monitoring'),
+        if (_loading) const Center(child: CircularProgressIndicator()),
+        if (_error != null)
+          Text(
+            _error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        for (final organization in _organizations)
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.business_outlined),
+              title: Text(organization.name),
+              subtitle: organization.currentUserRole == null
+                  ? null
+                  : Text(organization.currentUserRole!),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _select(organization),
+            ),
+          ),
+        if (!_loading && _organizations.isEmpty)
+          const Card(
+            child: ListTile(
+              title: Text('No organizations yet'),
+              subtitle: Text('Create one to begin adding devices.'),
+            ),
+          ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: _loading || _creating ? null : _createOrganization,
+          icon: const Icon(Icons.add_business),
+          label: Text(
+            _creating ? 'Creating organization...' : 'Create organization',
+          ),
         ),
         const SizedBox(height: 12),
-        const Text(
-          'Revoked access is handled by returning to this screen after HTTPS recovery.',
-          semanticsLabel: 'Revoked organization access is not retained',
+        const Card(
+          child: ListTile(
+            title: Text('Secure organization access'),
+            subtitle: Text(
+              'Only organizations authorized for the signed-in account are shown.',
+            ),
+          ),
         ),
       ],
     ),
@@ -319,10 +464,16 @@ class _ClaimScreenState extends ConsumerState<ClaimScreen> {
         FlutterSecureStorage(),
       ).readAccessToken();
       if (token == null) throw StateError('Sign in is required');
+      final organizationId = await const TokenStore(
+        FlutterSecureStorage(),
+      ).readSelectedOrganization();
+      if (organizationId == null) {
+        throw StateError('Organization selection is required');
+      }
       final api = PlatformApi(environment.apiBaseUrl);
       final session = await api.consumeClaim(
         accessToken: token,
-        organizationId: environment.organizationId,
+        organizationId: organizationId,
         claim: widget.claim,
       );
       if (mounted) {
@@ -570,26 +721,91 @@ class OtaScreen extends StatelessWidget {
   );
 }
 
-class AccountScreen extends ConsumerWidget {
+class AccountScreen extends ConsumerStatefulWidget {
   const AccountScreen({super.key});
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) => Scaffold(
+  ConsumerState<AccountScreen> createState() => _AccountScreenState();
+}
+
+class _AccountScreenState extends ConsumerState<AccountScreen> {
+  final _store = const TokenStore(FlutterSecureStorage());
+  OidcUserProfile? _profile;
+  bool _loading = true;
+  bool _signingOut = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final profile = await OidcClient(
+        ref.read(environmentProvider),
+        _store,
+      ).profile();
+      if (mounted) {
+        setState(() {
+          _profile = profile;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Signed-in account details are unavailable.';
+        });
+      }
+    }
+  }
+
+  Future<void> _signOut() async {
+    setState(() => _signingOut = true);
+    await OidcClient(ref.read(environmentProvider), _store).logout();
+    if (mounted) {
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Account')),
     body: Padding(
       padding: const EdgeInsets.all(16),
-      child: FilledButton.tonal(
-        onPressed: () async {
-          await OidcClient(
-            ref.read(environmentProvider),
-            const TokenStore(FlutterSecureStorage()),
-          ).logout();
-          if (context.mounted) {
-            Navigator.of(
-              context,
-            ).pushNamedAndRemoveUntil('/login', (_) => false);
-          }
-        },
-        child: const Text('Sign out'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_loading) const CircularProgressIndicator(),
+          if (_profile != null) ...[
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const CircleAvatar(child: Icon(Icons.person)),
+              title: Text(_profile!.primaryLabel),
+              subtitle: _profile!.email == null
+                  ? Text(_profile!.username ?? 'Keycloak account')
+                  : Text(_profile!.email!),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (_error != null)
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          const Text(
+            'The next sign-in opens Keycloak account selection, even when a browser SSO session already exists.',
+          ),
+          const SizedBox(height: 16),
+          FilledButton.tonalIcon(
+            onPressed: _signingOut ? null : _signOut,
+            icon: const Icon(Icons.logout),
+            label: Text(_signingOut ? 'Signing out...' : 'Sign out'),
+          ),
+        ],
       ),
     ),
   );
