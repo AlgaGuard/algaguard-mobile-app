@@ -22,11 +22,14 @@ class ProvisioningSession {
     required this.deviceId,
     required this.expiresAt,
     required String sessionToken,
-  }) : _sessionToken = sessionToken;
+    String? bindingGrant,
+  }) : _sessionToken = sessionToken,
+       _bindingGrant = bindingGrant;
   final String sessionId;
   final String deviceId;
   final DateTime expiresAt;
   String? _sessionToken;
+  String? _bindingGrant;
   static const clockSkewTolerance = Duration(seconds: 15);
   Duration remaining({DateTime? now}) {
     final value =
@@ -46,8 +49,19 @@ class ProvisioningSession {
     return value;
   }
 
-  void clear() => _sessionToken = null;
+  void clear() {
+    _sessionToken = null;
+    _bindingGrant = null;
+  }
+
+  String? takeBindingGrant() {
+    final value = _bindingGrant;
+    _bindingGrant = null;
+    return value;
+  }
+
   bool get retainsToken => _sessionToken != null;
+  bool get retainsBindingGrant => _bindingGrant != null;
 }
 
 class QrClaim {
@@ -114,6 +128,7 @@ abstract interface class BleProvisioner {
     required String sessionToken,
     required String ssid,
     required String password,
+    String? bindingGrant,
     void Function(SafeProvisioningStatus status)? onStatus,
   });
 }
@@ -129,6 +144,7 @@ class BleProtocol {
     required String sessionToken,
     required String ssid,
     required String password,
+    String? bindingGrant,
   }) {
     try {
       return BleProvisioningWire.canonicalPayload(
@@ -137,6 +153,7 @@ class BleProtocol {
         sessionToken: sessionToken,
         ssid: ssid,
         password: password,
+        bindingGrant: bindingGrant,
       );
     } on BleProvisioningWireException catch (_) {
       throw const FormatException('BLE provisioning request is invalid');
@@ -200,6 +217,7 @@ class ProvisioningController {
         sessionToken: session.takeToken(),
         ssid: ssid,
         password: _password!,
+        bindingGrant: session.takeBindingGrant(),
         onStatus: onStatus,
       );
       stage = ProvisioningStage.completed;

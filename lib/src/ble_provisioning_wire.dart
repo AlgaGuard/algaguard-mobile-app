@@ -6,6 +6,9 @@ const bleProvisioningStatusUuid = '0000a1a2-0000-1000-8000-00805f9b34fb';
 const bleProvisioningPayloadSchema =
     'urn:algaguard:schema:onboarding:ble-provisioning-request:v1';
 const bleProvisioningPayloadSchemaVersion = '1.0.0';
+const qrBleProvisioningPayloadSchema =
+    'urn:algaguard:schema:onboarding:ble-provisioning-request:v2';
+const qrBleProvisioningPayloadSchemaVersion = '2.0.0';
 
 class BleProvisioningWireException implements Exception {
   const BleProvisioningWireException(this.code);
@@ -177,6 +180,7 @@ class BleProvisioningWire {
     required String sessionToken,
     required String ssid,
     required String password,
+    String? bindingGrant,
   }) {
     if (!RegExp(
           r'^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$',
@@ -185,16 +189,25 @@ class BleProvisioningWire {
         !RegExp(r'^[A-Za-z0-9_-]{32,96}$').hasMatch(sessionToken) ||
         ssid.isEmpty ||
         utf8.encode(ssid).length > 32 ||
-        utf8.encode(password).length > 63) {
+        utf8.encode(password).length > 63 ||
+        (bindingGrant != null &&
+            !RegExp(r'^[A-Za-z0-9_-]{194}$').hasMatch(bindingGrant))) {
       throw const BleProvisioningWireException('INVALID_PROVISIONING_FIELDS');
     }
     final payload = utf8.encode(
       jsonEncode({
-        'schema': bleProvisioningPayloadSchema,
-        'schemaVersion': bleProvisioningPayloadSchemaVersion,
+        'schema': bindingGrant == null
+            ? bleProvisioningPayloadSchema
+            : qrBleProvisioningPayloadSchema,
+        'schemaVersion': bindingGrant == null
+            ? bleProvisioningPayloadSchemaVersion
+            : qrBleProvisioningPayloadSchemaVersion,
         'sessionId': sessionId,
         'deviceId': deviceId,
         'sessionToken': sessionToken,
+        ...bindingGrant == null
+            ? const <String, String>{}
+            : <String, String>{'bindingGrant': bindingGrant},
         'ssid': ssid,
         'password': password,
       }),

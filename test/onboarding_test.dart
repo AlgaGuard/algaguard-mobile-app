@@ -14,6 +14,7 @@ class FakeBle implements BleProvisioner {
     required String sessionToken,
     required String ssid,
     required String password,
+    String? bindingGrant,
     void Function(SafeProvisioningStatus status)? onStatus,
   }) async {
     receivedPassword = password;
@@ -30,6 +31,7 @@ class FailingBle implements BleProvisioner {
     required String sessionToken,
     required String ssid,
     required String password,
+    String? bindingGrant,
     void Function(SafeProvisioningStatus status)? onStatus,
   }) => Future<void>.error(StateError('wrong service UUID'));
 }

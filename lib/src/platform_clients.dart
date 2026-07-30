@@ -10,6 +10,7 @@ import 'ble_provisioning_wire.dart';
 import 'environment.dart';
 import 'onboarding.dart';
 import 'demo_telemetry.dart';
+import 'qr_onboarding.dart';
 
 class TokenStore {
   const TokenStore(this.storage);
@@ -372,6 +373,101 @@ class PlatformApi {
         .toList(growable: false);
   }
 
+  Future<PreparedPhysicalOnboarding> exchangeQrOnboarding({
+    required String accessToken,
+    required DeviceSummary device,
+    required QrOnboardingInvitation invitation,
+  }) async {
+    if (device.lifecycle != 'CLAIMED' ||
+        device.deviceId != invitation.deviceId) {
+      throw const FormatException('QR_DEVICE_MISMATCH');
+    }
+    late final Response<Object> response;
+    try {
+      response = await dio.post<Object>(
+        '/services/device/device-onboarding/qr/exchange',
+        options: Options(
+          headers: {'Authorization': 'Bearer $accessToken'},
+          followRedirects: false,
+        ),
+        data: {
+          'schema':
+              'urn:algaguard:schema:onboarding:qr-onboarding-exchange-request:v1',
+          'schemaVersion': '1.0.0',
+          'invitationUri': invitation.uri,
+          'ownershipVersion': device.ownershipVersion,
+        },
+      );
+    } on DioException catch (failure) {
+      throw QrOnboardingExchangeException(
+        failure.response?.statusCode == 410
+            ? QrOnboardingExchangeFailure.expired
+            : QrOnboardingExchangeFailure.unavailable,
+      );
+    }
+    if (response.statusCode != 201 ||
+        response.headers.value('cache-control')?.toLowerCase() != 'no-store' ||
+        response.data is! Map) {
+      throw const FormatException('QR_EXCHANGE_UNAVAILABLE');
+    }
+    final value = Map<String, dynamic>.from(response.data! as Map);
+    const required = {
+      'schema',
+      'schemaVersion',
+      'sessionId',
+      'deviceId',
+      'createdAt',
+      'expiresAt',
+      'serviceUuid',
+      'sessionToken',
+      'bindingGrant',
+    };
+    if (value.keys.toSet().difference(required).isNotEmpty ||
+        required.difference(value.keys.toSet()).isNotEmpty ||
+        value['schema'] !=
+            'urn:algaguard:schema:onboarding:qr-onboarding-exchange-response:v1' ||
+        value['schemaVersion'] != '1.0.0' ||
+        value['deviceId'] != invitation.deviceId ||
+        value['serviceUuid'] != bleProvisioningServiceUuid ||
+        value['sessionId'] is! String ||
+        !RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        ).hasMatch(value['sessionId'] as String) ||
+        value['sessionToken'] is! String ||
+        !RegExp(
+          r'^[A-Za-z0-9_-]{32,96}$',
+        ).hasMatch(value['sessionToken'] as String) ||
+        value['bindingGrant'] is! String ||
+        !RegExp(
+          r'^[A-Za-z0-9_-]{194}$',
+        ).hasMatch(value['bindingGrant'] as String) ||
+        value['expiresAt'] is! String) {
+      throw const FormatException('QR_EXCHANGE_UNAVAILABLE');
+    }
+    final expiresAt = DateTime.parse(value['expiresAt'] as String).toUtc();
+    if (!expiresAt.isAfter(DateTime.now().toUtc())) {
+      throw const FormatException('QR_EXCHANGE_EXPIRED');
+    }
+    return PreparedPhysicalOnboarding(
+      claim: QrClaim(
+        deviceId: invitation.deviceId,
+        claimCode: '',
+        bootstrapUrl: Uri(),
+        environment: 'development',
+        bleServiceId: bleProvisioningServiceUuid,
+        expiresAt: expiresAt,
+      ),
+      session: ProvisioningSession(
+        sessionId: value['sessionId'] as String,
+        deviceId: invitation.deviceId,
+        expiresAt: expiresAt,
+        sessionToken: value['sessionToken'] as String,
+        bindingGrant: value['bindingGrant'] as String,
+      ),
+    );
+  }
+
   Future<DemoTelemetryReading> latestDemoTelemetry({
     required String accessToken,
     required String deviceUuid,
@@ -598,6 +694,7 @@ class FlutterBlueProvisioner implements BleProvisioner {
     required String sessionToken,
     required String ssid,
     required String password,
+    String? bindingGrant,
     void Function(SafeProvisioningStatus status)? onStatus,
   }) async {
     if (serviceId.toLowerCase() != bleProvisioningServiceUuid) {
@@ -720,6 +817,7 @@ class FlutterBlueProvisioner implements BleProvisioner {
         sessionToken: sessionToken,
         ssid: ssid,
         password: password,
+        bindingGrant: bindingGrant,
       );
       frames = BleProvisioningWire.framePayload(payload, _nextMessageId());
       writer = SequentialFrameWriter(frames);

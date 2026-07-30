@@ -6,6 +6,7 @@ import 'package:algaguard_mobile_app/src/physical_session_handoff.dart';
 import 'package:algaguard_mobile_app/src/realtime_controller.dart';
 import 'package:algaguard_mobile_app/src/secure_transport_preflight.dart';
 import 'package:algaguard_mobile_app/src/platform_clients.dart';
+import 'package:algaguard_mobile_app/src/qr_onboarding.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -473,6 +474,10 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     return matches.length == 1 ? matches.single : null;
   }
 
+  List<DeviceSummary> get _claimedOwnedDevices => _devices
+      .where((device) => device.lifecycle == 'CLAIMED')
+      .toList(growable: false);
+
   Future<void> _preparePhysicalOnboarding(DeviceSummary device) async {
     if (_preparing || _attempted) return;
     PreparedPhysicalOnboarding? pending;
@@ -559,7 +564,30 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
           ),
         if (!_loading && _devices.isEmpty)
           const ListTile(title: Text('No devices in this organization')),
-        if (physicalSessionApprovalAvailable(releaseMode: kReleaseMode))
+        if (qrOnboardingAvailable(releaseMode: kReleaseMode) &&
+            _claimedOwnedDevices.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: FilledButton.icon(
+              onPressed: () async {
+                final authorized = await _authorizedContext();
+                if (!context.mounted) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => QrOnboardingScanScreen(
+                      api: authorized.$1,
+                      accessToken: authorized.$2,
+                      claimedDevices: _claimedOwnedDevices,
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('Scan device QR'),
+            ),
+          ),
+        if (!qrOnboardingAvailable(releaseMode: kReleaseMode) &&
+            physicalSessionApprovalAvailable(releaseMode: kReleaseMode))
           Padding(
             padding: const EdgeInsets.all(16),
             child: FilledButton.icon(
@@ -579,7 +607,8 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
               ),
             ),
           ),
-        if (physicalSessionApprovalAvailable(releaseMode: kReleaseMode) &&
+        if (!qrOnboardingAvailable(releaseMode: kReleaseMode) &&
+            physicalSessionApprovalAvailable(releaseMode: kReleaseMode) &&
             _expectedOwnedPhysicalDevice != null)
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16),
@@ -599,6 +628,122 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
           child: Text(
             'Devices shown here come only from the authorized platform API.',
           ),
+        ),
+      ],
+    ),
+  );
+}
+
+class QrOnboardingScanScreen extends StatefulWidget {
+  const QrOnboardingScanScreen({
+    super.key,
+    required this.api,
+    required this.accessToken,
+    required this.claimedDevices,
+  });
+
+  final PlatformApi api;
+  final String accessToken;
+  final List<DeviceSummary> claimedDevices;
+
+  @override
+  State<QrOnboardingScanScreen> createState() => _QrOnboardingScanScreenState();
+}
+
+class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
+  QrOnboardingScanState _state = QrOnboardingScanState.scanning;
+  bool _handled = false;
+
+  String get _safeStateText => switch (_state) {
+    QrOnboardingScanState.scanning => 'Scanning',
+    QrOnboardingScanState.detected => 'Device invitation detected',
+    QrOnboardingScanState.expired => 'Invitation expired',
+    QrOnboardingScanState.unsupported => 'Unsupported invitation',
+    QrOnboardingScanState.preparing => 'Preparing secure onboarding',
+    QrOnboardingScanState.ready => 'Connect to AlgaGuard-Setup',
+    QrOnboardingScanState.failed => 'Secure onboarding was not prepared',
+  };
+
+  Future<void> _accept(String raw) async {
+    if (_handled) return;
+    _handled = true;
+    QrOnboardingInvitation invitation;
+    late final DeviceSummary device;
+    try {
+      invitation = QrOnboardingCodec.decode(raw);
+      final matches = widget.claimedDevices
+          .where((candidate) => candidate.deviceId == invitation.deviceId)
+          .toList(growable: false);
+      if (matches.length != 1) {
+        throw const FormatException('DEVICE_MISMATCH');
+      }
+      device = matches.single;
+    } on FormatException catch (error) {
+      if (mounted) {
+        setState(
+          () => _state = error.message == 'INVITATION_EXPIRED'
+              ? QrOnboardingScanState.expired
+              : QrOnboardingScanState.unsupported,
+        );
+      }
+      return;
+    }
+    if (mounted) setState(() => _state = QrOnboardingScanState.detected);
+    try {
+      if (mounted) setState(() => _state = QrOnboardingScanState.preparing);
+      final prepared = await widget.api.exchangeQrOnboarding(
+        accessToken: widget.accessToken,
+        device: device,
+        invitation: invitation,
+      );
+      if (!mounted) {
+        prepared.session.clear();
+        return;
+      }
+      setState(() => _state = QrOnboardingScanState.ready);
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => BleProvisioningScreen(
+            claim: prepared.claim,
+            session: prepared.session,
+          ),
+        ),
+      );
+    } on QrOnboardingExchangeException catch (error) {
+      if (mounted) {
+        setState(
+          () => _state = error.failure == QrOnboardingExchangeFailure.expired
+              ? QrOnboardingScanState.expired
+              : QrOnboardingScanState.failed,
+        );
+      }
+    } catch (_) {
+      if (mounted) setState(() => _state = QrOnboardingScanState.failed);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Scan device QR')),
+    body: Column(
+      children: [
+        Expanded(
+          child: _handled
+              ? const Center(
+                  child: Icon(Icons.verified_user_outlined, size: 72),
+                )
+              : MobileScanner(
+                  onDetect: (capture) {
+                    final raw = capture.barcodes.isEmpty
+                        ? null
+                        : capture.barcodes.first.rawValue;
+                    if (raw != null) _accept(raw);
+                  },
+                ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(_safeStateText, key: const Key('qr-onboarding-state')),
         ),
       ],
     ),
