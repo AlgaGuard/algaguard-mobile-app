@@ -329,6 +329,38 @@ class PlatformApi {
     );
     return response.statusCode == 200;
   }
+
+  Future<String> requestRealtimeTicket({required String accessToken}) async {
+    final Response<Object> response;
+    try {
+      response = await dio.post<Object>(
+        '/services/realtime/tickets',
+        options: Options(
+          headers: {'Authorization': 'Bearer $accessToken'},
+          sendTimeout: const Duration(seconds: 8),
+          receiveTimeout: const Duration(seconds: 8),
+          followRedirects: false,
+        ),
+      );
+    } on DioException catch (error) {
+      final status = error.response?.statusCode;
+      if (status == 401 || status == 403) {
+        throw const RealtimeTicketException(RealtimeTicketFailure.rejected);
+      }
+      if (status == 410) {
+        throw const RealtimeTicketException(RealtimeTicketFailure.expired);
+      }
+      throw const RealtimeTicketException.unavailable();
+    }
+    if (response.statusCode != 201 || response.data is! Map) {
+      throw const RealtimeTicketException.unavailable();
+    }
+    final ticket = (response.data! as Map)['ticket'];
+    if (ticket is! String || ticket.isEmpty || ticket.length > 512) {
+      throw const RealtimeTicketException.unavailable();
+    }
+    return ticket;
+  }
 }
 
 class FlutterBlueProvisioner implements BleProvisioner {
@@ -507,47 +539,174 @@ class FlutterBlueProvisioner implements BleProvisioner {
   }
 }
 
-class RealtimeRecoveryClient {
+enum RealtimeTicketFailure { unavailable, rejected, expired }
+
+class RealtimeTicketException implements Exception {
+  const RealtimeTicketException(this.failure);
+  const RealtimeTicketException.unavailable()
+    : failure = RealtimeTicketFailure.unavailable;
+  final RealtimeTicketFailure failure;
+}
+
+enum RealtimeClientState {
+  connecting,
+  authenticating,
+  ready,
+  reconnecting,
+  unavailable,
+  authenticationFailed,
+  disconnected,
+}
+
+abstract interface class RealtimeConnection {
+  Future<void> connect();
+  Future<void> close();
+}
+
+class RealtimeRecoveryClient implements RealtimeConnection {
   RealtimeRecoveryClient({
     required this.url,
     required this.ticket,
     required this.recover,
-  });
+    required this.onState,
+    Random? random,
+  }) : _random = random ?? Random.secure();
   final Uri url;
   final Future<String> Function() ticket;
   final Future<void> Function() recover;
+  final void Function(RealtimeClientState state) onState;
+  final Random _random;
   WebSocket? _socket;
   bool _stopped = false;
+  bool _reconnectScheduled = false;
+  Timer? _reconnectTimer;
+  int _attempt = 0;
+
+  @override
   Future<void> connect() async {
-    final oneTimeTicket = await ticket();
-    _socket = await WebSocket.connect(
-      url.replace(queryParameters: {'ticket': oneTimeTicket}).toString(),
-    );
-    await recover();
-    _socket!.add(
-      jsonEncode({
-        'schema': 'algaguard.websocket.subscribe',
-        'schemaVersion': '1.0.0',
-        'requestId': 'mobile-session',
-        'subscriptions': [
-          {
-            'resourceType': 'current-user',
-            'events': ['system.notification'],
-          },
-        ],
-      }),
-    );
-    _socket!.done.then((_) => _reconnect());
-  }
-
-  Future<void> _reconnect() async {
     if (_stopped) return;
-    await Future<void>.delayed(const Duration(seconds: 1));
-    await connect();
+    _reconnectScheduled = false;
+    onState(RealtimeClientState.connecting);
+    String oneTimeTicket = '';
+    try {
+      oneTimeTicket = await ticket();
+      if (_stopped) return;
+      onState(RealtimeClientState.authenticating);
+      final socket = await WebSocket.connect(
+        url.replace(queryParameters: {'ticket': oneTimeTicket}).toString(),
+      );
+      oneTimeTicket = '';
+      if (_stopped) {
+        await socket.close();
+        return;
+      }
+      _socket = socket;
+      await recover();
+      if (_stopped) return;
+      final requestId = _newRequestId();
+      socket.listen(
+        (message) => _onMessage(message, requestId),
+        onDone: () => _onDone(socket.closeCode),
+        onError: (error, stackTrace) => _onDone(socket.closeCode),
+        cancelOnError: true,
+      );
+      socket.add(
+        jsonEncode({
+          'schema': 'algaguard.websocket.subscribe',
+          'schemaVersion': '1.0.0',
+          'requestId': requestId,
+          'subscriptions': [
+            {
+              'resourceType': 'current-user',
+              'events': ['system.notification'],
+            },
+          ],
+        }),
+      );
+    } on RealtimeTicketException {
+      oneTimeTicket = '';
+      if (!_stopped) onState(RealtimeClientState.authenticationFailed);
+    } on WebSocketException {
+      oneTimeTicket = '';
+      await _discardSocket();
+      if (!_stopped) onState(RealtimeClientState.unavailable);
+      _scheduleReconnect();
+    } catch (_) {
+      oneTimeTicket = '';
+      await _discardSocket();
+      if (!_stopped) onState(RealtimeClientState.unavailable);
+      _scheduleReconnect();
+    }
   }
 
+  void _onMessage(Object message, String requestId) {
+    if (_stopped || message is! String) return;
+    try {
+      final decoded = jsonDecode(message);
+      if (decoded is! Map || decoded['requestId'] != requestId) return;
+      final schema = decoded['schema'];
+      if (schema == 'urn:algaguard:schema:websocket:subscription-ack:v1' &&
+          decoded['accepted'] is List &&
+          (decoded['accepted'] as List).isNotEmpty) {
+        _attempt = 0;
+        onState(RealtimeClientState.ready);
+      } else if (schema == 'urn:algaguard:schema:websocket:realtime-error:v1') {
+        onState(RealtimeClientState.authenticationFailed);
+      }
+    } catch (_) {
+      // Invalid messages are ignored; the client never renders raw frames.
+    }
+  }
+
+  void _onDone(int? closeCode) {
+    if (_stopped) return;
+    _socket = null;
+    if (closeCode == 4401) {
+      onState(RealtimeClientState.authenticationFailed);
+      return;
+    }
+    onState(RealtimeClientState.disconnected);
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_stopped) return;
+    if (_reconnectScheduled) return;
+    _reconnectScheduled = true;
+    onState(RealtimeClientState.reconnecting);
+    final exponent = _attempt < 6 ? _attempt++ : 6;
+    final delay = Duration(
+      milliseconds: 500 * (1 << exponent) + _random.nextInt(251),
+    );
+    _reconnectTimer = Timer(delay, () async {
+      if (!_stopped) await connect();
+    });
+  }
+
+  Future<void> _discardSocket() async {
+    final socket = _socket;
+    _socket = null;
+    await socket?.close();
+  }
+
+  String _newRequestId() {
+    final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final hex = bytes
+        .map((value) => value.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+  }
+
+  @override
   Future<void> close() async {
     _stopped = true;
+    _reconnectScheduled = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     await _socket?.close();
+    _socket = null;
+    onState(RealtimeClientState.disconnected);
   }
 }

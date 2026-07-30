@@ -1,6 +1,7 @@
 import 'package:algaguard_mobile_app/src/environment.dart';
 import 'package:algaguard_mobile_app/src/onboarding.dart';
 import 'package:algaguard_mobile_app/src/physical_session_handoff.dart';
+import 'package:algaguard_mobile_app/src/realtime_controller.dart';
 import 'package:algaguard_mobile_app/src/secure_transport_preflight.dart';
 import 'package:algaguard_mobile_app/src/platform_clients.dart';
 import 'package:flutter/foundation.dart';
@@ -12,6 +13,25 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 final environmentProvider = Provider<AppEnvironment>(
   (_) => AppEnvironment.fromDefines(),
 );
+
+final realtimeControllerProvider =
+    ChangeNotifierProvider<RealtimeSessionController>((ref) {
+      final environment = ref.watch(environmentProvider);
+      final store = const TokenStore(FlutterSecureStorage());
+      final api = PlatformApi(environment.apiBaseUrl);
+      final controller = RealtimeSessionController(
+        url: environment.websocketUrl,
+        accessToken: store.readAccessToken,
+        requestTicket: (accessToken) =>
+            api.requestRealtimeTicket(accessToken: accessToken),
+        recover: () async {
+          // HTTPS remains authoritative whenever the socket is established.
+          await OidcClient(environment, store).profile();
+        },
+      );
+      ref.onDispose(controller.dispose);
+      return controller;
+    });
 
 void main() => runApp(const ProviderScope(child: AlgaGuardApp()));
 
@@ -299,8 +319,14 @@ class _OrganizationScreenState extends ConsumerState<OrganizationScreen> {
   );
 }
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
   static const _items = <(String, IconData, String)>[
     ('Devices', Icons.memory, '/devices'),
     ('Scan setup QR', Icons.qr_code_scanner, '/scan'),
@@ -309,42 +335,56 @@ class HomeScreen extends StatelessWidget {
     ('Development OTA status', Icons.system_update, '/ota'),
     ('Account', Icons.account_circle, '/account'),
   ];
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text('AlgaGuard'),
-      actions: const [
-        Padding(
-          padding: EdgeInsets.all(10),
-          child: Chip(label: Text('SIMULATED')),
-        ),
-      ],
-    ),
-    body: ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: _items.length + 1,
-      separatorBuilder: (_, _) => const Divider(),
-      itemBuilder: (context, index) {
-        if (index == 0) {
-          return const Card(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                'Live updates use one-time WebSocket tickets; HTTPS recovers authoritative state after reconnect.',
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(realtimeControllerProvider).start();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final realtime = ref.watch(realtimeControllerProvider);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('AlgaGuard'),
+        actions: [
+          Padding(
+            padding: EdgeInsets.all(10),
+            child: Chip(label: Text(realtime.state.visibleText)),
+          ),
+        ],
+      ),
+      body: ListView.separated(
+        padding: const EdgeInsets.all(16),
+        itemCount: _items.length + 1,
+        separatorBuilder: (_, _) => const Divider(),
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  'Live updates use one-time WebSocket tickets; HTTPS recovers authoritative state after reconnect.',
+                ),
               ),
-            ),
+            );
+          }
+          final item = _items[index - 1];
+          return ListTile(
+            leading: Icon(item.$2),
+            title: Text(item.$1),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).pushNamed(item.$3),
           );
-        }
-        final item = _items[index - 1];
-        return ListTile(
-          leading: Icon(item.$2),
-          title: Text(item.$1),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.of(context).pushNamed(item.$3),
-        );
-      },
-    ),
-  );
+        },
+      ),
+    );
+  }
 }
 
 class DevicesScreen extends StatelessWidget {
@@ -765,6 +805,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
 
   Future<void> _signOut() async {
     setState(() => _signingOut = true);
+    await ref.read(realtimeControllerProvider).stop();
     await OidcClient(ref.read(environmentProvider), _store).logout();
     if (mounted) {
       Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);

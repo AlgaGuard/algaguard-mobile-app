@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 AppEnvironment environment({
   String api = 'https://api.algaguard.bosilu.dev/v1',
-  String websocket = 'wss://realtime.algaguard.bosilu.dev',
+  String websocket = 'wss://realtime.algaguard.bosilu.dev/realtime',
   String issuer = 'https://auth.algaguard.bosilu.dev/realms/algaguard',
 }) => AppEnvironment(
   flavor: EnvironmentFlavor.development,
@@ -45,6 +45,12 @@ void main() {
     expect(
       () => environment(
         websocket: 'ws://realtime.example.test',
+      ).validateForMode(releaseMode: true, localHttps: false),
+      throwsStateError,
+    );
+    expect(
+      () => environment(
+        websocket: 'wss://realtime.algaguard.bosilu.dev',
       ).validateForMode(releaseMode: true, localHttps: false),
       throwsStateError,
     );

@@ -38,9 +38,10 @@ class AppEnvironment {
       }
       if (websocketUrl.scheme != 'wss' ||
           websocketUrl.host == 'localhost' ||
-          websocketUrl.host == '127.0.0.1') {
+          websocketUrl.host == '127.0.0.1' ||
+          websocketUrl.path != '/realtime') {
         throw StateError(
-          'Release realtime endpoint must use trusted public WSS',
+          'Release realtime endpoint must use trusted public WSS /realtime',
         );
       }
     }
