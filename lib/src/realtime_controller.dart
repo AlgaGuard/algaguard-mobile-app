@@ -46,25 +46,39 @@ class RealtimeSessionController extends ChangeNotifier {
     required this.requestTicket,
     required this.recover,
     RealtimeConnectionFactory? connectionFactory,
-  }) : _connectionFactory = connectionFactory ?? _defaultFactory(url);
+    this.subscriptions,
+    this.onEvent,
+  }) {
+    _connectionFactory =
+        connectionFactory ??
+        _defaultFactory(url, subscriptions, acceptSafeEvent);
+  }
 
   final Uri url;
   final Future<String?> Function() accessToken;
   final Future<String> Function(String accessToken) requestTicket;
   final Future<void> Function() recover;
-  final RealtimeConnectionFactory _connectionFactory;
+  late final RealtimeConnectionFactory _connectionFactory;
+  final Future<List<Map<String, Object>>> Function()? subscriptions;
+  final void Function(Map<String, dynamic> event)? onEvent;
   RealtimeConnection? _connection;
   RealtimeSessionState _state = RealtimeSessionState.signedOut;
   bool _starting = false;
   bool _ticketPresent = false;
   int _generation = 0;
+  int _eventRevision = 0;
   bool _disposed = false;
 
   RealtimeSessionState get state => _state;
   bool get ticketPresent => _ticketPresent;
   bool get reconnectScheduled => _state == RealtimeSessionState.reconnecting;
+  int get eventRevision => _eventRevision;
 
-  static RealtimeConnectionFactory _defaultFactory(Uri url) =>
+  static RealtimeConnectionFactory _defaultFactory(
+    Uri url,
+    Future<List<Map<String, Object>>> Function()? subscriptions,
+    void Function(Map<String, dynamic> event) onEvent,
+  ) =>
       ({
         required Future<String> Function() ticket,
         required Future<void> Function() recover,
@@ -74,6 +88,8 @@ class RealtimeSessionController extends ChangeNotifier {
         ticket: ticket,
         recover: recover,
         onState: onState,
+        subscriptions: subscriptions,
+        onEvent: onEvent,
       );
 
   Future<void> start() async {
@@ -137,6 +153,13 @@ class RealtimeSessionController extends ChangeNotifier {
         RealtimeSessionState.authenticationFailed,
       RealtimeClientState.disconnected => RealtimeSessionState.disconnected,
     });
+  }
+
+  void acceptSafeEvent(Map<String, dynamic> event) {
+    if (_disposed || event['eventType'] != 'telemetry.updated') return;
+    _eventRevision++;
+    onEvent?.call(event);
+    notifyListeners();
   }
 
   Future<void> stop() async {

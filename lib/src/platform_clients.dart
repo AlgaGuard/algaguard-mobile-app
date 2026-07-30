@@ -9,6 +9,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble_provisioning_wire.dart';
 import 'environment.dart';
 import 'onboarding.dart';
+import 'demo_telemetry.dart';
 
 class TokenStore {
   const TokenStore(this.storage);
@@ -369,6 +370,22 @@ class PlatformApi {
               DeviceSummary.fromJson(Map<String, dynamic>.from(item as Map)),
         )
         .toList(growable: false);
+  }
+
+  Future<DemoTelemetryReading> latestDemoTelemetry({
+    required String accessToken,
+    required String deviceUuid,
+  }) async {
+    final response = await dio.get<Object>(
+      '/services/telemetry/devices/$deviceUuid/latest',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    if (response.statusCode != 200 || response.data is! Map) {
+      throw StateError('Telemetry is unavailable');
+    }
+    return DemoTelemetryReading.fromLatestResponse(
+      Map<String, dynamic>.from(response.data! as Map),
+    );
   }
 
   /// Development-only owner-authorized recovery. The returned session remains
@@ -764,12 +781,16 @@ class RealtimeRecoveryClient implements RealtimeConnection {
     required this.ticket,
     required this.recover,
     required this.onState,
+    this.subscriptions,
+    this.onEvent,
     Random? random,
   }) : _random = random ?? Random.secure();
   final Uri url;
   final Future<String> Function() ticket;
   final Future<void> Function() recover;
   final void Function(RealtimeClientState state) onState;
+  final Future<List<Map<String, Object>>> Function()? subscriptions;
+  final void Function(Map<String, dynamic> event)? onEvent;
   final Random _random;
   WebSocket? _socket;
   bool _stopped = false;
@@ -810,12 +831,14 @@ class RealtimeRecoveryClient implements RealtimeConnection {
           'schema': 'algaguard.websocket.subscribe',
           'schemaVersion': '1.0.0',
           'requestId': requestId,
-          'subscriptions': [
-            {
-              'resourceType': 'current-user',
-              'events': ['system.notification'],
-            },
-          ],
+          'subscriptions': subscriptions == null
+              ? [
+                  {
+                    'resourceType': 'current-user',
+                    'events': ['system.notification'],
+                  },
+                ]
+              : await subscriptions!(),
         }),
       );
     } on RealtimeTicketException {
@@ -838,8 +861,14 @@ class RealtimeRecoveryClient implements RealtimeConnection {
     if (_stopped || message is! String) return;
     try {
       final decoded = jsonDecode(message);
-      if (decoded is! Map || decoded['requestId'] != requestId) return;
+      if (decoded is! Map) return;
       final schema = decoded['schema'];
+      if (schema == 'urn:algaguard:schema:websocket:telemetry-updated:v1-1' &&
+          decoded['eventType'] == 'telemetry.updated') {
+        onEvent?.call(Map<String, dynamic>.from(decoded));
+        return;
+      }
+      if (decoded['requestId'] != requestId) return;
       if (schema == 'urn:algaguard:schema:websocket:subscription-ack:v1' &&
           decoded['accepted'] is List &&
           (decoded['accepted'] as List).isNotEmpty) {

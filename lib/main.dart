@@ -1,4 +1,6 @@
 import 'package:algaguard_mobile_app/src/environment.dart';
+import 'package:algaguard_mobile_app/src/demo_telemetry.dart';
+import 'package:algaguard_mobile_app/src/demo_telemetry_view.dart';
 import 'package:algaguard_mobile_app/src/onboarding.dart';
 import 'package:algaguard_mobile_app/src/physical_session_handoff.dart';
 import 'package:algaguard_mobile_app/src/realtime_controller.dart';
@@ -27,6 +29,28 @@ final realtimeControllerProvider =
         recover: () async {
           // HTTPS remains authoritative whenever the socket is established.
           await OidcClient(environment, store).profile();
+        },
+        subscriptions: () async {
+          final organizationId = await store.readSelectedOrganization();
+          if (organizationId == null) {
+            return [
+              <String, Object>{
+                'resourceType': 'current-user',
+                'events': <String>['system.notification'],
+              },
+            ];
+          }
+          return [
+            <String, Object>{
+              'resourceType': 'organization',
+              'resourceId': organizationId,
+              'events': <String>['telemetry.updated'],
+            },
+            <String, Object>{
+              'resourceType': 'current-user',
+              'events': <String>['system.notification'],
+            },
+          ];
         },
       );
       ref.onDispose(controller.dispose);
@@ -527,7 +551,11 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
             title: Text(device.deviceId),
             subtitle: Text('${device.lifecycle} · authorized HTTPS state'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).pushNamed('/device'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => DeviceDetailsScreen(device: device),
+              ),
+            ),
           ),
         if (!_loading && _devices.isEmpty)
           const ListTile(title: Text('No devices in this organization')),
@@ -842,74 +870,147 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
   );
 }
 
-class DeviceDetailsScreen extends StatelessWidget {
-  const DeviceDetailsScreen({super.key});
+class DeviceDetailsScreen extends ConsumerStatefulWidget {
+  const DeviceDetailsScreen({super.key, this.device});
+  final DeviceSummary? device;
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('AG-000001')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const Chip(label: Text('SIMULATED telemetry')),
-        const Card(
-          child: ListTile(
-            title: Text('Live telemetry'),
-            subtitle: Text(
-              'Temperature, pH, light, nitrate, phosphate, potassium',
+  ConsumerState<DeviceDetailsScreen> createState() =>
+      _DeviceDetailsScreenState();
+}
+
+class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
+  final _store = const TokenStore(FlutterSecureStorage());
+  DemoTelemetryReading? _reading;
+  bool _loading = true;
+  String? _error;
+  int _observedEventRevision = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<DeviceSummary> _resolveDevice(
+    PlatformApi api,
+    String token,
+    String organizationId,
+  ) async {
+    if (widget.device != null) return widget.device!;
+    final devices = await api.listDevices(
+      accessToken: token,
+      organizationId: organizationId,
+    );
+    final owned = devices.where((value) => value.lifecycle != 'UNCLAIMED');
+    if (owned.length != 1) throw StateError('Demo device unavailable');
+    return owned.single;
+  }
+
+  Future<void> _load() async {
+    try {
+      final token = await _store.readAccessToken();
+      final organizationId = await _store.readSelectedOrganization();
+      if (token == null || organizationId == null) {
+        throw StateError('Authentication required');
+      }
+      final api = PlatformApi(ref.read(environmentProvider).apiBaseUrl);
+      final device = await _resolveDevice(api, token, organizationId);
+      final reading = await api.latestDemoTelemetry(
+        accessToken: token,
+        deviceUuid: device.deviceUuid,
+      );
+      if (mounted) {
+        setState(() {
+          _reading = reading;
+          _error = null;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _error = 'Simulated telemetry is unavailable.';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final realtime = ref.watch(realtimeControllerProvider);
+    if (_observedEventRevision != realtime.eventRevision) {
+      _observedEventRevision = realtime.eventRevision;
+      if (_observedEventRevision > 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+      }
+    }
+    final reading = _reading;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Demo device telemetry')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (_loading) const LinearProgressIndicator(),
+          if (_error != null) Text(_error!, key: const Key('telemetry-error')),
+          if (reading != null)
+            DemoTelemetryView(
+              reading: reading,
+              realtimeText: realtime.state.visibleText,
+              now: DateTime.now(),
             ),
-          ),
-        ),
-        const Card(
-          child: ListTile(
-            title: Text('Profile'),
-            subtitle: Text(
-              'Development demo values — not scientifically approved',
-            ),
-          ),
-        ),
-        const Card(
-          child: ListTile(
-            title: Text('Cloud / certificate'),
-            subtitle: Text('HTTPS recovery and one-time WSS tickets'),
-          ),
-        ),
-        FilledButton.icon(
-          onPressed: () async {
-            final confirmed = await showDialog<bool>(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('Set demo indicator state?'),
-                content: const Text(
-                  'This is a safe LED-only command. No reset or reboot action is available.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    child: const Text('Cancel'),
-                  ),
-                  FilledButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    child: const Text('Confirm'),
-                  ),
-                ],
+          const Card(
+            child: ListTile(
+              title: Text('Profile'),
+              subtitle: Text(
+                'Development demo values — not scientifically approved',
               ),
-            );
-            if (confirmed == true && context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'REQUEST_STATUS / indicator command queued for authorized device.',
+            ),
+          ),
+          const Card(
+            child: ListTile(
+              title: Text('Cloud / certificate'),
+              subtitle: Text('HTTPS recovery and one-time WSS tickets'),
+            ),
+          ),
+          FilledButton.icon(
+            onPressed: () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Set demo indicator state?'),
+                  content: const Text(
+                    'This is a safe LED-only command. No reset or reboot action is available.',
                   ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Confirm'),
+                    ),
+                  ],
                 ),
               );
-            }
-          },
-          icon: const Icon(Icons.lightbulb_outline),
-          label: const Text('Safe LED control'),
-        ),
-      ],
-    ),
-  );
+              if (confirmed == true && context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'REQUEST_STATUS / indicator command queued for authorized device.',
+                    ),
+                  ),
+                );
+              }
+            },
+            icon: const Icon(Icons.lightbulb_outline),
+            label: const Text('Safe LED control'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class OtaScreen extends StatelessWidget {
