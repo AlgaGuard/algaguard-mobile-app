@@ -84,6 +84,19 @@ void main() {
     expect(source, isNot(contains('createAndConsumePhysicalClaim')));
   });
 
+  test('safe UI message is preserved while retaining a typed category', () {
+    final source = File('lib/main.dart').readAsStringSync();
+    expect(
+      source,
+      contains(
+        'Bootstrap session was not prepared. Stop this one-shot attempt.',
+      ),
+    );
+    expect(source, contains('on BootstrapReissueException catch (error)'));
+    expect(source, contains('_reissueFailureCategory = error.category'));
+    expect(source, isNot(contains('error.response')));
+  });
+
   test('6 release build hides and rejects the reissue action', () {
     expect(physicalSessionApprovalAvailable(releaseMode: true), isFalse);
     final source = File('lib/main.dart').readAsStringSync();

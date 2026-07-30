@@ -401,6 +401,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
   bool _preparing = false;
   bool _attempted = false;
   String? _error;
+  BootstrapReissueFailureCategory? _reissueFailureCategory;
 
   @override
   void initState() {
@@ -455,6 +456,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
       _preparing = true;
       _attempted = true;
       _error = null;
+      _reissueFailureCategory = null;
     });
     try {
       final authorized = await _authorizedContext();
@@ -490,13 +492,24 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
         ),
       );
       pending = null;
+    } on BootstrapReissueException catch (error) {
+      pending?.session.clear();
+      if (mounted) {
+        setState(() {
+          _reissueFailureCategory = error.category;
+          _error =
+              'Bootstrap session was not prepared. Stop this one-shot attempt.';
+        });
+      }
     } catch (_) {
       pending?.session.clear();
       if (mounted) {
-        setState(
-          () => _error =
-              'Bootstrap session was not prepared. Stop this one-shot attempt.',
-        );
+        setState(() {
+          _reissueFailureCategory =
+              BootstrapReissueFailureCategory.unexpectedFailure;
+          _error =
+              'Bootstrap session was not prepared. Stop this one-shot attempt.';
+        });
       }
     } finally {
       if (mounted) setState(() => _preparing = false);
@@ -549,6 +562,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
             padding: const EdgeInsets.all(16),
             child: Text(
               _error!,
+              key: ValueKey(_reissueFailureCategory),
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
           ),

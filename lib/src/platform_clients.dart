@@ -380,19 +380,39 @@ class PlatformApi {
     if (device.lifecycle != 'CLAIMED') {
       throw StateError('Owned device is not eligible for bootstrap reissue');
     }
-    final response = await dio.post<Object>(
-      '/services/device/devices/${device.deviceUuid}/bootstrap-sessions/reissue',
-      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
-      data: {
-        'schema':
-            'urn:algaguard:schema:onboarding:owned-device-bootstrap-reissue-request:v1',
-        'schemaVersion': '1.0.0',
-        'ownershipVersion': device.ownershipVersion,
-        'expiresInSeconds': 300,
-      },
-    );
+    final Response<Object> response;
+    try {
+      response = await dio.post<Object>(
+        '/services/device/devices/${device.deviceUuid}/bootstrap-sessions/reissue',
+        options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+        data: {
+          'schema':
+              'urn:algaguard:schema:onboarding:owned-device-bootstrap-reissue-request:v1',
+          'schemaVersion': '1.0.0',
+          'ownershipVersion': device.ownershipVersion,
+          'expiresInSeconds': 300,
+        },
+      );
+    } on DioException catch (error) {
+      final status = error.response?.statusCode;
+      if (status == 401 || status == 403) {
+        throw const BootstrapReissueException(
+          BootstrapReissueFailureCategory.authorizationFailure,
+        );
+      }
+      if (status != null && status >= 500) {
+        throw const BootstrapReissueException(
+          BootstrapReissueFailureCategory.serverFailure,
+        );
+      }
+      throw const BootstrapReissueException(
+        BootstrapReissueFailureCategory.transportFailure,
+      );
+    }
     if (response.statusCode != 201 || response.data is! Map) {
-      throw StateError('Bootstrap session was not reissued');
+      throw const BootstrapReissueException(
+        BootstrapReissueFailureCategory.responseSchemaMismatch,
+      );
     }
     final value = Map<String, dynamic>.from(response.data! as Map);
     const required = {
@@ -417,19 +437,35 @@ class PlatformApi {
           caseSensitive: false,
         ).hasMatch(value['sessionId'] as String) ||
         value['createdAt'] is! String ||
-        value['serviceUuid'] != bleProvisioningServiceUuid ||
         value['sessionToken'] is! String ||
         !RegExp(
           r'^[A-Za-z0-9_-]{32,96}$',
         ).hasMatch(value['sessionToken'] as String) ||
         value['expiresAt'] is! String) {
-      throw const FormatException('Invalid bootstrap reissue response');
+      throw const BootstrapReissueException(
+        BootstrapReissueFailureCategory.responseSchemaMismatch,
+      );
     }
-    final createdAt = DateTime.parse(value['createdAt'] as String).toUtc();
-    final expiresAt = DateTime.parse(value['expiresAt'] as String).toUtc();
+    if (value['serviceUuid'] != bleProvisioningServiceUuid) {
+      throw const BootstrapReissueException(
+        BootstrapReissueFailureCategory.serviceUuidMismatch,
+      );
+    }
+    late final DateTime createdAt;
+    late final DateTime expiresAt;
+    try {
+      createdAt = DateTime.parse(value['createdAt'] as String).toUtc();
+      expiresAt = DateTime.parse(value['expiresAt'] as String).toUtc();
+    } on FormatException {
+      throw const BootstrapReissueException(
+        BootstrapReissueFailureCategory.responseSchemaMismatch,
+      );
+    }
     if (!expiresAt.isAfter(createdAt) ||
         !expiresAt.isAfter(DateTime.now().toUtc())) {
-      throw const FormatException('Bootstrap session expired');
+      throw const BootstrapReissueException(
+        BootstrapReissueFailureCategory.responseSchemaMismatch,
+      );
     }
     return PreparedPhysicalOnboarding(
       claim: QrClaim(
@@ -868,4 +904,22 @@ class RealtimeRecoveryClient implements RealtimeConnection {
     _socket = null;
     onState(RealtimeClientState.disconnected);
   }
+}
+
+enum BootstrapReissueFailureCategory {
+  responseSchemaMismatch,
+  serviceUuidMismatch,
+  transportFailure,
+  authorizationFailure,
+  serverFailure,
+  unexpectedFailure,
+}
+
+class BootstrapReissueException implements Exception {
+  const BootstrapReissueException(this.category);
+
+  final BootstrapReissueFailureCategory category;
+
+  @override
+  String toString() => 'BootstrapReissueException(${category.name})';
 }

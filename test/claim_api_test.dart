@@ -6,6 +6,39 @@ import 'package:algaguard_mobile_app/src/platform_clients.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+const reissueDevice = DeviceSummary(
+  deviceUuid: '10000000-0000-4000-8000-000000000001',
+  deviceId: 'AG-000001',
+  lifecycle: 'CLAIMED',
+  ownershipVersion: '1',
+);
+
+Map<String, Object> repairedBackendResponse({
+  String serviceUuid = bleProvisioningServiceUuid,
+}) => {
+  'schema': 'urn:algaguard:schema:onboarding:bootstrap-session:v1',
+  'schemaVersion': '1.0.0',
+  'sessionId': '50000000-0000-4000-8000-000000000001',
+  'deviceId': 'AG-000001',
+  'createdAt': '2029-12-31T23:55:00Z',
+  'expiresAt': '2030-01-01T00:00:00Z',
+  'serviceUuid': serviceUuid,
+  'sessionToken': 'x' * 32,
+};
+
+Dio reissueClient(Object response, {int statusCode = 201}) => Dio()
+  ..interceptors.add(
+    InterceptorsWrapper(
+      onRequest: (options, handler) => handler.resolve(
+        Response(
+          requestOptions: options,
+          statusCode: statusCode,
+          data: response,
+        ),
+      ),
+    ),
+  );
+
 void main() {
   test(
     'claim consume uses the authoritative path, bearer, organization, and typed session',
@@ -87,17 +120,7 @@ void main() {
               Response(
                 requestOptions: options,
                 statusCode: 201,
-                data: {
-                  'schema':
-                      'urn:algaguard:schema:onboarding:bootstrap-session:v1',
-                  'schemaVersion': '1.0.0',
-                  'sessionId': '50000000-0000-4000-8000-000000000001',
-                  'deviceId': 'AG-000001',
-                  'createdAt': '2029-12-31T23:55:00Z',
-                  'expiresAt': '2030-01-01T00:00:00Z',
-                  'serviceUuid': bleProvisioningServiceUuid,
-                  'sessionToken': 'x' * 32,
-                },
+                data: repairedBackendResponse(),
               ),
             );
           },
@@ -109,12 +132,7 @@ void main() {
             client: dio,
           ).reissueOwnedDeviceBootstrapSession(
             accessToken: 'access-token',
-            device: const DeviceSummary(
-              deviceUuid: '10000000-0000-4000-8000-000000000001',
-              deviceId: 'AG-000001',
-              lifecycle: 'CLAIMED',
-              ownershipVersion: '1',
-            ),
+            device: reissueDevice,
           );
       expect(paths, [
         '/services/device/devices/10000000-0000-4000-8000-000000000001/bootstrap-sessions/reissue',
@@ -124,4 +142,118 @@ void main() {
       prepared.session.clear();
     },
   );
+
+  test(
+    'repaired Device Service response prepares an in-memory session',
+    () async {
+      final prepared =
+          await PlatformApi(
+            Uri.parse('https://api.example/v1'),
+            client: reissueClient(repairedBackendResponse()),
+          ).reissueOwnedDeviceBootstrapSession(
+            accessToken: 'test-access',
+            device: reissueDevice,
+          );
+      expect(prepared.claim.bleServiceId, bleProvisioningServiceUuid);
+      expect(prepared.session.retainsToken, isTrue);
+      prepared.session.clear();
+      expect(prepared.session.retainsToken, isFalse);
+    },
+  );
+
+  test('previous backend UUID maps to a typed service UUID mismatch', () async {
+    final future =
+        PlatformApi(
+          Uri.parse('https://api.example/v1'),
+          client: reissueClient(
+            repairedBackendResponse(
+              serviceUuid: 'a19a0001-7e4d-4b1a-9c2d-000000000001',
+            ),
+          ),
+        ).reissueOwnedDeviceBootstrapSession(
+          accessToken: 'test-access',
+          device: reissueDevice,
+        );
+    await expectLater(
+      future,
+      throwsA(
+        isA<BootstrapReissueException>().having(
+          (error) => error.category,
+          'category',
+          BootstrapReissueFailureCategory.serviceUuidMismatch,
+        ),
+      ),
+    );
+  });
+
+  test(
+    'response and transport failures retain only safe typed categories',
+    () async {
+      final invalidResponse =
+          PlatformApi(
+            Uri.parse('https://api.example/v1'),
+            client: reissueClient({'unexpected': true}),
+          ).reissueOwnedDeviceBootstrapSession(
+            accessToken: 'test-access',
+            device: reissueDevice,
+          );
+      await expectLater(
+        invalidResponse,
+        throwsA(
+          isA<BootstrapReissueException>().having(
+            (error) => error.category,
+            'category',
+            BootstrapReissueFailureCategory.responseSchemaMismatch,
+          ),
+        ),
+      );
+
+      final dio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) => handler.reject(
+              DioException(
+                requestOptions: options,
+                type: DioExceptionType.connectionTimeout,
+              ),
+            ),
+          ),
+        );
+      final transportFailure =
+          PlatformApi(
+            Uri.parse('https://api.example/v1'),
+            client: dio,
+          ).reissueOwnedDeviceBootstrapSession(
+            accessToken: 'test-access',
+            device: reissueDevice,
+          );
+      await expectLater(
+        transportFailure,
+        throwsA(
+          isA<BootstrapReissueException>().having(
+            (error) => error.category,
+            'category',
+            BootstrapReissueFailureCategory.transportFailure,
+          ),
+        ),
+      );
+    },
+  );
+
+  test('typed diagnostics contain no response or secret material', () {
+    const error = BootstrapReissueException(
+      BootstrapReissueFailureCategory.serviceUuidMismatch,
+    );
+    final safe = error.toString();
+    expect(safe, 'BootstrapReissueException(serviceUuidMismatch)');
+    for (final forbidden in [
+      'sessionToken',
+      'sessionId',
+      'authorization',
+      'response',
+      'AG-',
+    ]) {
+      expect(safe, isNot(contains(forbidden)));
+    }
+  });
 }
