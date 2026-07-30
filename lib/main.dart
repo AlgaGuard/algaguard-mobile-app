@@ -387,23 +387,154 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-class DevicesScreen extends StatelessWidget {
+class DevicesScreen extends ConsumerStatefulWidget {
   const DevicesScreen({super.key});
+
+  @override
+  ConsumerState<DevicesScreen> createState() => _DevicesScreenState();
+}
+
+class _DevicesScreenState extends ConsumerState<DevicesScreen> {
+  final _store = const TokenStore(FlutterSecureStorage());
+  List<DeviceSummary> _devices = const [];
+  bool _loading = true;
+  bool _preparing = false;
+  bool _attempted = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<(PlatformApi, String, String)> _authorizedContext() async {
+    final token = await _store.readAccessToken();
+    final organizationId = await _store.readSelectedOrganization();
+    if (token == null || organizationId == null) {
+      throw StateError('Authenticated organization is required');
+    }
+    return (
+      PlatformApi(ref.read(environmentProvider).apiBaseUrl),
+      token,
+      organizationId,
+    );
+  }
+
+  Future<void> _load() async {
+    try {
+      final authorized = await _authorizedContext();
+      final devices = await authorized.$1.listDevices(
+        accessToken: authorized.$2,
+        organizationId: authorized.$3,
+      );
+      if (mounted) setState(() => _devices = devices);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Authorized devices could not be loaded.');
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _preparePhysicalOnboarding() async {
+    if (_preparing || _attempted) return;
+    PreparedPhysicalOnboarding? pending;
+    setState(() {
+      _preparing = true;
+      _attempted = true;
+      _error = null;
+    });
+    try {
+      final authorized = await _authorizedContext();
+      final prepared = await authorized.$1.createAndConsumePhysicalClaim(
+        accessToken: authorized.$2,
+        organizationId: authorized.$3,
+      );
+      pending = prepared;
+      if (!mounted) {
+        prepared.session.clear();
+        return;
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => PhysicalSessionApprovalScreen(
+            controller: PhysicalSessionApprovalController(
+              api: authorized.$1,
+              accessToken: authorized.$2,
+              session: prepared.session,
+              enabled: true,
+            ),
+            onApproved: (approvalContext, session) {
+              Navigator.of(approvalContext).pushReplacement(
+                MaterialPageRoute<void>(
+                  builder: (_) => BleProvisioningScreen(
+                    claim: prepared.claim,
+                    session: session,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      pending = null;
+    } catch (_) {
+      pending?.session.clear();
+      if (mounted) {
+        setState(
+          () => _error =
+              'Physical claim was not prepared. Stop this one-shot attempt.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _preparing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Devices')),
     body: ListView(
       children: [
-        ListTile(
-          title: const Text('AG-000001'),
-          subtitle: const Text('SIMULATED · status recovered through HTTPS'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.of(context).pushNamed('/device'),
-        ),
+        if (_loading) const LinearProgressIndicator(),
+        for (final device in _devices)
+          ListTile(
+            title: Text(device.deviceId),
+            subtitle: Text('${device.lifecycle} · authorized HTTPS state'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).pushNamed('/device'),
+          ),
+        if (!_loading && _devices.isEmpty)
+          const ListTile(title: Text('No devices in this organization')),
+        if (physicalSessionApprovalAvailable(releaseMode: kReleaseMode))
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: FilledButton.icon(
+              onPressed: _preparing || _attempted
+                  ? null
+                  : _preparePhysicalOnboarding,
+              icon: const Icon(Icons.developer_board),
+              label: Text(
+                _preparing
+                    ? 'Preparing one-shot claim…'
+                    : 'Prepare physical onboarding',
+              ),
+            ),
+          ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
         const Padding(
           padding: EdgeInsets.all(16),
           child: Text(
-            'The local demo shows only data returned by the authorized platform APIs.',
+            'Devices shown here come only from the authorized platform API.',
           ),
         ),
       ],
@@ -528,6 +659,16 @@ class _ClaimScreenState extends ConsumerState<ClaimScreen> {
                       session: session,
                       enabled: true,
                     ),
+                    onApproved: (approvalContext, approvedSession) {
+                      Navigator.of(approvalContext).pushReplacement(
+                        MaterialPageRoute<void>(
+                          builder: (_) => BleProvisioningScreen(
+                            claim: widget.claim,
+                            session: approvedSession,
+                          ),
+                        ),
+                      );
+                    },
                   )
                 : BleProvisioningScreen(claim: widget.claim, session: session),
           ),

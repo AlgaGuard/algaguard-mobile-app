@@ -38,7 +38,7 @@ void main() {
         api: api((options) {
           expect(
             options.path,
-            '/development/physical-session-handoffs/approve',
+            '/services/device/development/physical-session-handoffs/approve',
           );
           expect(options.headers['Authorization'], 'Bearer access');
           expect(options.data, {
@@ -95,12 +95,13 @@ void main() {
   );
 
   test('5 terminal paths are safe and clear session references', () async {
+    final active = session();
     final controller = PhysicalSessionApprovalController(
       api: api((_) {
         throw DioException(requestOptions: RequestOptions());
       }),
       accessToken: 'access',
-      session: session(),
+      session: active,
       enabled: true,
     );
     expect(
@@ -108,6 +109,7 @@ void main() {
       PhysicalSessionApprovalState.networkError,
     );
     expect(controller.session, isNull);
+    expect(active.retainsToken, isFalse);
   });
 
   test(
@@ -140,9 +142,11 @@ void main() {
         await controller.approve('AB2CDE'),
         PhysicalSessionApprovalState.approved,
       );
+      expect(controller.session, same(active));
+      final moved = controller.takeApprovedSession();
+      expect(moved, same(active));
       expect(controller.session, isNull);
-      expect(active.retainsToken, isTrue);
-      active.clear();
+      moved.clear();
     },
   );
 

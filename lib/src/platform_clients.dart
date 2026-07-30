@@ -202,6 +202,57 @@ class OrganizationSummary {
   final String? currentUserRole;
 }
 
+class DeviceSummary {
+  const DeviceSummary({
+    required this.deviceUuid,
+    required this.deviceId,
+    required this.lifecycle,
+  });
+
+  factory DeviceSummary.fromJson(Map<String, dynamic> value) {
+    final deviceUuid = value['deviceUuid'];
+    final deviceId = value['deviceId'];
+    final lifecycle = value['lifecycle'];
+    if (deviceUuid is! String ||
+        !RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        ).hasMatch(deviceUuid) ||
+        deviceId is! String ||
+        !RegExp(r'^AG-[0-9]{6}$').hasMatch(deviceId) ||
+        lifecycle is! String ||
+        !const {
+          'UNCLAIMED',
+          'CLAIMED',
+          'PROVISIONED',
+          'ACTIVE',
+          'INACTIVE',
+          'REVOKED',
+        }.contains(lifecycle)) {
+      throw const FormatException('Invalid device response');
+    }
+    return DeviceSummary(
+      deviceUuid: deviceUuid,
+      deviceId: deviceId,
+      lifecycle: lifecycle,
+    );
+  }
+
+  final String deviceUuid;
+  final String deviceId;
+  final String lifecycle;
+}
+
+class PreparedPhysicalOnboarding {
+  const PreparedPhysicalOnboarding({
+    required this.claim,
+    required this.session,
+  });
+
+  final QrClaim claim;
+  final ProvisioningSession session;
+}
+
 class PlatformApi {
   PlatformApi(Uri baseUrl, {Dio? client})
     : dio =
@@ -265,7 +316,7 @@ class PlatformApi {
     required QrClaim claim,
   }) async {
     final response = await dio.post<Object>(
-      '/claims/consume',
+      '/services/device/claims/consume',
       options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
       data: {
         'organizationId': organizationId,
@@ -290,6 +341,111 @@ class PlatformApi {
     );
   }
 
+  Future<List<DeviceSummary>> listDevices({
+    required String accessToken,
+    required String organizationId,
+  }) async {
+    final response = await dio.get<Object>(
+      '/services/device/devices',
+      queryParameters: {'organizationId': organizationId},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    if (response.statusCode != 200 || response.data is! Map) {
+      throw StateError('Devices are unavailable');
+    }
+    final items = (response.data! as Map)['items'];
+    if (items is! List || items.length > 100) {
+      throw const FormatException('Invalid devices response');
+    }
+    return items
+        .map(
+          (item) =>
+              DeviceSummary.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList(growable: false);
+  }
+
+  /// Development-only one-shot preparation. The claim secret moves directly
+  /// from setup response to consume request and is never rendered or stored.
+  Future<PreparedPhysicalOnboarding> createAndConsumePhysicalClaim({
+    required String accessToken,
+    required String organizationId,
+  }) async {
+    final created = await dio.post<Object>(
+      '/services/device/devices',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {
+        'organizationId': organizationId,
+        'hardwareModel': 'ESP32-S3-DEVKITC-1-N16R8',
+      },
+    );
+    if (created.statusCode != 201 || created.data is! Map) {
+      throw StateError('Physical device record was not created');
+    }
+    final device = Map<String, dynamic>.from(created.data! as Map);
+    final deviceUuid = device['deviceUuid'];
+    final deviceId = device['deviceId'];
+    if (deviceUuid is! String ||
+        !RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        ).hasMatch(deviceUuid) ||
+        deviceId != 'AG-000001') {
+      throw const FormatException('Physical device binding is unavailable');
+    }
+    final setup = await dio.post<Object>(
+      '/services/device/devices/$deviceUuid/setup',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {'expiresInSeconds': 600},
+    );
+    if (setup.statusCode != 201 || setup.data is! Map) {
+      throw StateError('Physical claim was not created');
+    }
+    final value = Map<String, dynamic>.from(setup.data! as Map);
+    if (value.keys.toSet().difference(const {
+          'v',
+          'd',
+          'c',
+          'e',
+          'f',
+        }).isNotEmpty ||
+        value['v'] != 1 ||
+        value['d'] != deviceId ||
+        value['c'] is! String ||
+        !RegExp(r'^[A-Za-z0-9_-]{32,64}$').hasMatch(value['c'] as String) ||
+        value['e'] is! String) {
+      throw const FormatException('Physical claim response is invalid');
+    }
+    final expiresAt = DateTime.parse(value['e'] as String).toUtc();
+    if (!expiresAt.isAfter(DateTime.now().toUtc())) {
+      throw const FormatException('Physical claim expired');
+    }
+    final transientClaim = QrClaim(
+      deviceId: deviceId,
+      claimCode: value['c'] as String,
+      bootstrapUrl: Uri.parse('/services/device/claims/consume'),
+      environment: 'development',
+      bleServiceId: bleProvisioningServiceUuid,
+      expiresAt: expiresAt,
+    );
+    final session = await consumeClaim(
+      accessToken: accessToken,
+      organizationId: organizationId,
+      claim: transientClaim,
+    );
+    return PreparedPhysicalOnboarding(
+      claim: QrClaim(
+        deviceId: deviceId,
+        claimCode: '',
+        bootstrapUrl: Uri.parse('/services/device/claims/consume'),
+        environment: 'development',
+        bleServiceId: bleProvisioningServiceUuid,
+        expiresAt: expiresAt,
+      ),
+      session: session,
+    );
+  }
+
   /// Development-only approval. Callers must keep the supplied session in RAM
   /// and must not log or persist the request body.
   Future<void> approvePhysicalSessionHandoff({
@@ -306,7 +462,7 @@ class PlatformApi {
       throw const FormatException('HANDOFF_APPROVAL_UNAVAILABLE');
     }
     await dio.post<void>(
-      '/development/physical-session-handoffs/approve',
+      '/services/device/development/physical-session-handoffs/approve',
       options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
       data: {
         'protocolVersion': 1,

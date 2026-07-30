@@ -53,6 +53,7 @@ class PhysicalSessionApprovalController {
       return state = PhysicalSessionApprovalState.invalidCode;
     }
     if (active == null || active.isExpired) {
+      active?.clear();
       session = null;
       return state = PhysicalSessionApprovalState.sessionUnavailable;
     }
@@ -64,9 +65,9 @@ class PhysicalSessionApprovalController {
         userCode: normalized,
         session: active,
       );
-      session = null;
       return state = PhysicalSessionApprovalState.approved;
     } on FormatException {
+      active.clear();
       session = null;
       return state = PhysicalSessionApprovalState.invalidCode;
     } catch (_) {
@@ -78,7 +79,17 @@ class PhysicalSessionApprovalController {
     }
   }
 
+  ProvisioningSession takeApprovedSession() {
+    final active = session;
+    if (state != PhysicalSessionApprovalState.approved || active == null) {
+      throw StateError('Approved session is unavailable');
+    }
+    session = null;
+    return active;
+  }
+
   void clear() {
+    session?.clear();
     session = null;
   }
 
@@ -89,8 +100,14 @@ class PhysicalSessionApprovalController {
 /// Deliberately not registered in normal navigation. Physical validation code
 /// may present this development-only screen after an in-memory claim succeeds.
 class PhysicalSessionApprovalScreen extends StatefulWidget {
-  const PhysicalSessionApprovalScreen({super.key, required this.controller});
+  const PhysicalSessionApprovalScreen({
+    super.key,
+    required this.controller,
+    required this.onApproved,
+  });
   final PhysicalSessionApprovalController controller;
+  final void Function(BuildContext context, ProvisioningSession session)
+  onApproved;
 
   @override
   State<PhysicalSessionApprovalScreen> createState() =>
@@ -121,9 +138,13 @@ class _PhysicalSessionApprovalScreenState
   };
 
   Future<void> _approve() async {
-    await widget.controller.approve(_userCode.text);
+    final result = await widget.controller.approve(_userCode.text);
     _userCode.clear();
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    if (result == PhysicalSessionApprovalState.approved) {
+      widget.onApproved(context, widget.controller.takeApprovedSession());
+    }
   }
 
   @override
