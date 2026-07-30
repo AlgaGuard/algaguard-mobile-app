@@ -207,12 +207,14 @@ class DeviceSummary {
     required this.deviceUuid,
     required this.deviceId,
     required this.lifecycle,
+    required this.ownershipVersion,
   });
 
   factory DeviceSummary.fromJson(Map<String, dynamic> value) {
     final deviceUuid = value['deviceUuid'];
     final deviceId = value['deviceId'];
     final lifecycle = value['lifecycle'];
+    final ownershipVersion = value['ownershipVersion'];
     if (deviceUuid is! String ||
         !RegExp(
           r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
@@ -221,6 +223,8 @@ class DeviceSummary {
         deviceId is! String ||
         !RegExp(r'^AG-[0-9]{6}$').hasMatch(deviceId) ||
         lifecycle is! String ||
+        ownershipVersion is! String ||
+        !RegExp(r'^[1-9][0-9]{0,18}$').hasMatch(ownershipVersion) ||
         !const {
           'UNCLAIMED',
           'CLAIMED',
@@ -235,12 +239,14 @@ class DeviceSummary {
       deviceUuid: deviceUuid,
       deviceId: deviceId,
       lifecycle: lifecycle,
+      ownershipVersion: ownershipVersion,
     );
   }
 
   final String deviceUuid;
   final String deviceId;
   final String lifecycle;
+  final String ownershipVersion;
 }
 
 class PreparedPhysicalOnboarding {
@@ -365,84 +371,81 @@ class PlatformApi {
         .toList(growable: false);
   }
 
-  /// Development-only one-shot preparation. The claim secret moves directly
-  /// from setup response to consume request and is never rendered or stored.
-  Future<PreparedPhysicalOnboarding> createAndConsumePhysicalClaim({
+  /// Development-only owner-authorized recovery. The returned session remains
+  /// in memory only and no claim, device, or ownership record is created.
+  Future<PreparedPhysicalOnboarding> reissueOwnedDeviceBootstrapSession({
     required String accessToken,
-    required String organizationId,
+    required DeviceSummary device,
   }) async {
-    final created = await dio.post<Object>(
-      '/services/device/devices',
+    if (device.lifecycle != 'CLAIMED') {
+      throw StateError('Owned device is not eligible for bootstrap reissue');
+    }
+    final response = await dio.post<Object>(
+      '/services/device/devices/${device.deviceUuid}/bootstrap-sessions/reissue',
       options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
       data: {
-        'organizationId': organizationId,
-        'hardwareModel': 'ESP32-S3-DEVKITC-1-N16R8',
+        'schema':
+            'urn:algaguard:schema:onboarding:owned-device-bootstrap-reissue-request:v1',
+        'schemaVersion': '1.0.0',
+        'ownershipVersion': device.ownershipVersion,
+        'expiresInSeconds': 300,
       },
     );
-    if (created.statusCode != 201 || created.data is! Map) {
-      throw StateError('Physical device record was not created');
+    if (response.statusCode != 201 || response.data is! Map) {
+      throw StateError('Bootstrap session was not reissued');
     }
-    final device = Map<String, dynamic>.from(created.data! as Map);
-    final deviceUuid = device['deviceUuid'];
-    final deviceId = device['deviceId'];
-    if (deviceUuid is! String ||
+    final value = Map<String, dynamic>.from(response.data! as Map);
+    const required = {
+      'schema',
+      'schemaVersion',
+      'sessionId',
+      'deviceId',
+      'createdAt',
+      'expiresAt',
+      'serviceUuid',
+      'sessionToken',
+    };
+    if (value.keys.toSet().difference(required).isNotEmpty ||
+        !value.keys.toSet().containsAll(required) ||
+        value['schema'] !=
+            'urn:algaguard:schema:onboarding:bootstrap-session:v1' ||
+        value['schemaVersion'] != '1.0.0' ||
+        value['deviceId'] != device.deviceId ||
+        value['sessionId'] is! String ||
         !RegExp(
           r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
           caseSensitive: false,
-        ).hasMatch(deviceUuid) ||
-        deviceId != 'AG-000001') {
-      throw const FormatException('Physical device binding is unavailable');
+        ).hasMatch(value['sessionId'] as String) ||
+        value['createdAt'] is! String ||
+        value['serviceUuid'] != bleProvisioningServiceUuid ||
+        value['sessionToken'] is! String ||
+        !RegExp(
+          r'^[A-Za-z0-9_-]{32,96}$',
+        ).hasMatch(value['sessionToken'] as String) ||
+        value['expiresAt'] is! String) {
+      throw const FormatException('Invalid bootstrap reissue response');
     }
-    final setup = await dio.post<Object>(
-      '/services/device/devices/$deviceUuid/setup',
-      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
-      data: {'expiresInSeconds': 600},
-    );
-    if (setup.statusCode != 201 || setup.data is! Map) {
-      throw StateError('Physical claim was not created');
+    final createdAt = DateTime.parse(value['createdAt'] as String).toUtc();
+    final expiresAt = DateTime.parse(value['expiresAt'] as String).toUtc();
+    if (!expiresAt.isAfter(createdAt) ||
+        !expiresAt.isAfter(DateTime.now().toUtc())) {
+      throw const FormatException('Bootstrap session expired');
     }
-    final value = Map<String, dynamic>.from(setup.data! as Map);
-    if (value.keys.toSet().difference(const {
-          'v',
-          'd',
-          'c',
-          'e',
-          'f',
-        }).isNotEmpty ||
-        value['v'] != 1 ||
-        value['d'] != deviceId ||
-        value['c'] is! String ||
-        !RegExp(r'^[A-Za-z0-9_-]{32,64}$').hasMatch(value['c'] as String) ||
-        value['e'] is! String) {
-      throw const FormatException('Physical claim response is invalid');
-    }
-    final expiresAt = DateTime.parse(value['e'] as String).toUtc();
-    if (!expiresAt.isAfter(DateTime.now().toUtc())) {
-      throw const FormatException('Physical claim expired');
-    }
-    final transientClaim = QrClaim(
-      deviceId: deviceId,
-      claimCode: value['c'] as String,
-      bootstrapUrl: Uri.parse('/services/device/claims/consume'),
-      environment: 'development',
-      bleServiceId: bleProvisioningServiceUuid,
-      expiresAt: expiresAt,
-    );
-    final session = await consumeClaim(
-      accessToken: accessToken,
-      organizationId: organizationId,
-      claim: transientClaim,
-    );
     return PreparedPhysicalOnboarding(
       claim: QrClaim(
-        deviceId: deviceId,
+        deviceId: device.deviceId,
         claimCode: '',
         bootstrapUrl: Uri.parse('/services/device/claims/consume'),
         environment: 'development',
         bleServiceId: bleProvisioningServiceUuid,
         expiresAt: expiresAt,
       ),
-      session: session,
+      session: ProvisioningSession(
+        sessionId: value['sessionId'] as String,
+        deviceId: device.deviceId,
+        expiresAt: expiresAt,
+        sessionToken: value['sessionToken'] as String,
+      ),
     );
   }
 

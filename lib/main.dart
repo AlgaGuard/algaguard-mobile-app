@@ -438,7 +438,17 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     }
   }
 
-  Future<void> _preparePhysicalOnboarding() async {
+  DeviceSummary? get _expectedOwnedPhysicalDevice {
+    final matches = _devices
+        .where(
+          (device) =>
+              device.deviceId == 'AG-000001' && device.lifecycle == 'CLAIMED',
+        )
+        .toList(growable: false);
+    return matches.length == 1 ? matches.single : null;
+  }
+
+  Future<void> _preparePhysicalOnboarding(DeviceSummary device) async {
     if (_preparing || _attempted) return;
     PreparedPhysicalOnboarding? pending;
     setState(() {
@@ -448,9 +458,9 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     });
     try {
       final authorized = await _authorizedContext();
-      final prepared = await authorized.$1.createAndConsumePhysicalClaim(
+      final prepared = await authorized.$1.reissueOwnedDeviceBootstrapSession(
         accessToken: authorized.$2,
-        organizationId: authorized.$3,
+        device: device,
       );
       pending = prepared;
       if (!mounted) {
@@ -485,7 +495,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
       if (mounted) {
         setState(
           () => _error =
-              'Physical claim was not prepared. Stop this one-shot attempt.',
+              'Bootstrap session was not prepared. Stop this one-shot attempt.',
         );
       }
     } finally {
@@ -512,16 +522,27 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
           Padding(
             padding: const EdgeInsets.all(16),
             child: FilledButton.icon(
-              onPressed: _preparing || _attempted
+              onPressed:
+                  _preparing ||
+                      _attempted ||
+                      _expectedOwnedPhysicalDevice == null
                   ? null
-                  : _preparePhysicalOnboarding,
+                  : () => _preparePhysicalOnboarding(
+                      _expectedOwnedPhysicalDevice!,
+                    ),
               icon: const Icon(Icons.developer_board),
               label: Text(
                 _preparing
-                    ? 'Preparing one-shot claim…'
-                    : 'Prepare physical onboarding',
+                    ? 'Reissuing bootstrap session…'
+                    : 'Reissue development bootstrap session',
               ),
             ),
+          ),
+        if (physicalSessionApprovalAvailable(releaseMode: kReleaseMode) &&
+            _expectedOwnedPhysicalDevice != null)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: Text('Development session approval available'),
           ),
         if (_error != null)
           Padding(

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:algaguard_mobile_app/src/onboarding.dart';
+import 'package:algaguard_mobile_app/src/ble_provisioning_wire.dart';
 import 'package:algaguard_mobile_app/src/platform_clients.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -66,7 +67,7 @@ void main() {
   );
 
   test(
-    'development physical preparation creates and consumes one claim without returning its secret',
+    '1 owned device requests one replacement session without claim or device creation',
     () async {
       final paths = <String>[];
       final dio = Dio();
@@ -74,49 +75,31 @@ void main() {
         InterceptorsWrapper(
           onRequest: (options, handler) {
             paths.add(options.path);
-            if (paths.length == 1) {
-              handler.resolve(
-                Response(
-                  requestOptions: options,
-                  statusCode: 201,
-                  data: {
-                    'deviceUuid': '10000000-0000-4000-8000-000000000001',
-                    'deviceId': 'AG-000001',
-                  },
-                ),
-              );
-            } else if (paths.length == 2) {
-              handler.resolve(
-                Response(
-                  requestOptions: options,
-                  statusCode: 201,
-                  data: {
-                    'v': 1,
-                    'd': 'AG-000001',
-                    'c': 'c' * 32,
-                    'e': '2030-01-01T00:00:00Z',
-                    'f': 'ABCDEFGH',
-                  },
-                ),
-              );
-            } else {
-              expect((options.data as Map)['claimCode'], 'c' * 32);
-              handler.resolve(
-                Response(
-                  requestOptions: options,
-                  statusCode: 200,
-                  data: {
-                    'device': {'deviceId': 'AG-000001'},
-                    'bootstrap': {
-                      'sessionId': '50000000-0000-4000-8000-000000000001',
-                      'deviceId': 'AG-000001',
-                      'expiresAt': '2030-01-01T00:00:00Z',
-                      'sessionToken': 'x' * 32,
-                    },
-                  },
-                ),
-              );
-            }
+            expect(options.method, 'POST');
+            expect(options.data, {
+              'schema':
+                  'urn:algaguard:schema:onboarding:owned-device-bootstrap-reissue-request:v1',
+              'schemaVersion': '1.0.0',
+              'ownershipVersion': '1',
+              'expiresInSeconds': 300,
+            });
+            handler.resolve(
+              Response(
+                requestOptions: options,
+                statusCode: 201,
+                data: {
+                  'schema':
+                      'urn:algaguard:schema:onboarding:bootstrap-session:v1',
+                  'schemaVersion': '1.0.0',
+                  'sessionId': '50000000-0000-4000-8000-000000000001',
+                  'deviceId': 'AG-000001',
+                  'createdAt': '2029-12-31T23:55:00Z',
+                  'expiresAt': '2030-01-01T00:00:00Z',
+                  'serviceUuid': bleProvisioningServiceUuid,
+                  'sessionToken': 'x' * 32,
+                },
+              ),
+            );
           },
         ),
       );
@@ -124,14 +107,17 @@ void main() {
           await PlatformApi(
             Uri.parse('https://api.example/v1'),
             client: dio,
-          ).createAndConsumePhysicalClaim(
+          ).reissueOwnedDeviceBootstrapSession(
             accessToken: 'access-token',
-            organizationId: '20000000-0000-4000-8000-000000000002',
+            device: const DeviceSummary(
+              deviceUuid: '10000000-0000-4000-8000-000000000001',
+              deviceId: 'AG-000001',
+              lifecycle: 'CLAIMED',
+              ownershipVersion: '1',
+            ),
           );
       expect(paths, [
-        '/services/device/devices',
-        '/services/device/devices/10000000-0000-4000-8000-000000000001/setup',
-        '/services/device/claims/consume',
+        '/services/device/devices/10000000-0000-4000-8000-000000000001/bootstrap-sessions/reissue',
       ]);
       expect(prepared.claim.claimCode, isEmpty);
       expect(prepared.session.retainsToken, isTrue);
