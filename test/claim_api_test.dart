@@ -111,10 +111,9 @@ void main() {
             expect(options.method, 'POST');
             expect(options.data, {
               'schema':
-                  'urn:algaguard:schema:onboarding:owned-device-bootstrap-reissue-request:v1',
-              'schemaVersion': '1.0.0',
+                  'urn:algaguard:schema:onboarding:owned-device-bootstrap-reissue-request:v2',
+              'schemaVersion': '2.0.0',
               'ownershipVersion': '1',
-              'expiresInSeconds': 300,
             });
             handler.resolve(
               Response(

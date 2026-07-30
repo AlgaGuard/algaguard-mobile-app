@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -30,15 +32,35 @@ class PhysicalSessionApprovalController {
     required this.accessToken,
     required this.session,
     required this.enabled,
-  });
+    DateTime Function()? now,
+  }) : _now = now ?? (() => DateTime.now().toUtc());
 
   final PlatformApi api;
   final String accessToken;
   ProvisioningSession? session;
   final bool enabled;
+  final DateTime Function() _now;
   bool _busy = false;
   bool get busy => _busy;
   PhysicalSessionApprovalState state = PhysicalSessionApprovalState.ready;
+
+  Duration get remaining => session?.remaining(now: _now()) ?? Duration.zero;
+
+  bool refreshExpiry() {
+    final active = session;
+    if (active == null || !active.isExpiredAt(_now())) return false;
+    active.clear();
+    session = null;
+    state = PhysicalSessionApprovalState.expired;
+    return true;
+  }
+
+  bool replaceExpiredSession(ProvisioningSession replacement) {
+    if (session != null && !refreshExpiry()) return false;
+    session = replacement;
+    state = PhysicalSessionApprovalState.ready;
+    return true;
+  }
 
   Future<PhysicalSessionApprovalState> approve(String userCode) async {
     if (!enabled || kReleaseMode) {
@@ -52,10 +74,11 @@ class PhysicalSessionApprovalController {
     if (!RegExp(r'^[A-HJ-NP-Z2-9]{6,16}$').hasMatch(normalized)) {
       return state = PhysicalSessionApprovalState.invalidCode;
     }
-    if (active == null || active.isExpired) {
+    if (active == null || refreshExpiry()) {
       active?.clear();
-      session = null;
-      return state = PhysicalSessionApprovalState.sessionUnavailable;
+      return state = active == null
+          ? PhysicalSessionApprovalState.sessionUnavailable
+          : PhysicalSessionApprovalState.expired;
     }
     _busy = true;
     state = PhysicalSessionApprovalState.approving;
@@ -66,6 +89,12 @@ class PhysicalSessionApprovalController {
         session: active,
       );
       return state = PhysicalSessionApprovalState.approved;
+    } on PhysicalSessionApprovalException catch (error) {
+      clear();
+      return state = switch (error.category) {
+        PhysicalSessionApprovalFailureCategory.expired =>
+          PhysicalSessionApprovalState.expired,
+      };
     } on FormatException {
       active.clear();
       session = null;
@@ -117,9 +146,22 @@ class PhysicalSessionApprovalScreen extends StatefulWidget {
 class _PhysicalSessionApprovalScreenState
     extends State<PhysicalSessionApprovalScreen> {
   final _userCode = TextEditingController();
+  Timer? _countdown;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.refreshExpiry();
+    _countdown = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      widget.controller.refreshExpiry();
+      setState(() {});
+    });
+  }
 
   @override
   void dispose() {
+    _countdown?.cancel();
     _userCode.clear();
     _userCode.dispose();
     widget.controller.clear();
@@ -127,15 +169,22 @@ class _PhysicalSessionApprovalScreenState
   }
 
   String get _status => switch (widget.controller.state) {
-    PhysicalSessionApprovalState.ready => 'Ready',
+    PhysicalSessionApprovalState.ready => 'Session ready',
     PhysicalSessionApprovalState.approving => 'Approving',
     PhysicalSessionApprovalState.approved => 'HANDOFF_APPROVED',
     PhysicalSessionApprovalState.invalidCode => 'Invalid code',
-    PhysicalSessionApprovalState.expired => 'Expired',
+    PhysicalSessionApprovalState.expired => 'Session expired',
     PhysicalSessionApprovalState.rejected => 'Rejected',
     PhysicalSessionApprovalState.sessionUnavailable => 'Session unavailable',
     PhysicalSessionApprovalState.networkError => 'Network error',
   };
+
+  String get _countdownText {
+    final remaining = widget.controller.remaining;
+    final minutes = remaining.inMinutes.toString().padLeft(2, '0');
+    final seconds = (remaining.inSeconds % 60).toString().padLeft(2, '0');
+    return 'Expires in $minutes:$seconds';
+  }
 
   Future<void> _approve() async {
     final result = await widget.controller.approve(_userCode.text);
@@ -169,10 +218,19 @@ class _PhysicalSessionApprovalScreenState
               decoration: const InputDecoration(labelText: 'User code'),
             ),
             FilledButton(
-              onPressed: widget.controller.busy ? null : _approve,
+              onPressed:
+                  widget.controller.busy ||
+                      widget.controller.state ==
+                          PhysicalSessionApprovalState.expired
+                  ? null
+                  : _approve,
               child: Text(widget.controller.busy ? 'Approving…' : 'Approve'),
             ),
             Text(_status),
+            if (widget.controller.state != PhysicalSessionApprovalState.expired)
+              Text(_countdownText),
+            if (widget.controller.state == PhysicalSessionApprovalState.expired)
+              const Text('Request a fresh development session'),
           ],
         ),
       ),

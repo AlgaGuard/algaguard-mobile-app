@@ -27,7 +27,16 @@ class ProvisioningSession {
   final String deviceId;
   final DateTime expiresAt;
   String? _sessionToken;
-  bool get isExpired => !expiresAt.isAfter(DateTime.now().toUtc());
+  static const clockSkewTolerance = Duration(seconds: 15);
+  Duration remaining({DateTime? now}) {
+    final value =
+        expiresAt.difference((now ?? DateTime.now()).toUtc()) -
+        clockSkewTolerance;
+    return value.isNegative ? Duration.zero : value;
+  }
+
+  bool isExpiredAt(DateTime now) => remaining(now: now) == Duration.zero;
+  bool get isExpired => isExpiredAt(DateTime.now().toUtc());
   String takeToken() {
     final value = _sessionToken;
     if (value == null || isExpired) {

@@ -404,10 +404,9 @@ class PlatformApi {
         options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
         data: {
           'schema':
-              'urn:algaguard:schema:onboarding:owned-device-bootstrap-reissue-request:v1',
-          'schemaVersion': '1.0.0',
+              'urn:algaguard:schema:onboarding:owned-device-bootstrap-reissue-request:v2',
+          'schemaVersion': '2.0.0',
           'ownershipVersion': device.ownershipVersion,
-          'expiresInSeconds': 300,
         },
       );
     } on DioException catch (error) {
@@ -517,17 +516,26 @@ class PlatformApi {
         session.isExpired) {
       throw const FormatException('HANDOFF_APPROVAL_UNAVAILABLE');
     }
-    await dio.post<void>(
-      '/services/device/development/physical-session-handoffs/approve',
-      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
-      data: {
-        'protocolVersion': 1,
-        'userCode': normalizedCode,
-        'sessionId': session.sessionId,
-        'deviceId': session.deviceId,
-        'sessionToken': session.takeToken(),
-      },
-    );
+    try {
+      await dio.post<void>(
+        '/services/device/development/physical-session-handoffs/approve',
+        options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+        data: {
+          'protocolVersion': 1,
+          'userCode': normalizedCode,
+          'sessionId': session.sessionId,
+          'deviceId': session.deviceId,
+          'sessionToken': session.takeToken(),
+        },
+      );
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 410) {
+        throw const PhysicalSessionApprovalException(
+          PhysicalSessionApprovalFailureCategory.expired,
+        );
+      }
+      rethrow;
+    }
   }
 
   Future<bool> secureTransportHealthPreflight() async {
@@ -951,4 +959,14 @@ class BootstrapReissueException implements Exception {
 
   @override
   String toString() => 'BootstrapReissueException(${category.name})';
+}
+
+enum PhysicalSessionApprovalFailureCategory { expired }
+
+class PhysicalSessionApprovalException implements Exception {
+  const PhysicalSessionApprovalException(this.category);
+  final PhysicalSessionApprovalFailureCategory category;
+
+  @override
+  String toString() => 'PhysicalSessionApprovalException(${category.name})';
 }

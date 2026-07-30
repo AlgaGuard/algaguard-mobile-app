@@ -1,5 +1,10 @@
 # Synthetic physical-session handoff
 
+The development approval screen uses the server-returned bootstrap-session
+`expiresAt` for its countdown and applies a 15-second early safety margin for
+clock skew. It displays only `Session ready`, `Expires in mm:ss`, or
+`Session expired`; release builds continue to exclude the approval control.
+
 `DEVELOPMENT_ONLY_PHYSICAL_SESSION_APPROVAL` is disabled by default and cannot
 be enabled for release builds. The mobile approval UI accepts only a short user
 code. It reads the claim session only from RAM, sends it once to the generated
