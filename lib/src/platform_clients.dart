@@ -261,6 +261,8 @@ class PreparedPhysicalOnboarding {
   final ProvisioningSession session;
 }
 
+enum DeviceCloudReadiness { ready, timedOut, unavailable }
+
 class PlatformApi {
   PlatformApi(Uri baseUrl, {Dio? client})
     : dio =
@@ -371,6 +373,50 @@ class PlatformApi {
               DeviceSummary.fromJson(Map<String, dynamic>.from(item as Map)),
         )
         .toList(growable: false);
+  }
+
+  Future<DeviceCloudReadiness> waitForDeviceCloudReadiness({
+    required String accessToken,
+    required String organizationId,
+    required String deviceId,
+    Duration timeout = const Duration(seconds: 45),
+    Duration pollInterval = const Duration(seconds: 2),
+    Future<void> Function(Duration) delay = Future<void>.delayed,
+  }) async {
+    if (!RegExp(r'^AG-[0-9]{6}$').hasMatch(deviceId) ||
+        timeout <= Duration.zero ||
+        pollInterval <= Duration.zero) {
+      throw const FormatException('Invalid cloud readiness request');
+    }
+    final deadline = DateTime.now().toUtc().add(timeout);
+    do {
+      try {
+        final devices = await listDevices(
+          accessToken: accessToken,
+          organizationId: organizationId,
+        );
+        final matches = devices.where((device) => device.deviceId == deviceId);
+        if (matches.length != 1) return DeviceCloudReadiness.unavailable;
+        if (const {
+          'PROVISIONED',
+          'ACTIVE',
+        }.contains(matches.single.lifecycle)) {
+          return DeviceCloudReadiness.ready;
+        }
+        if (matches.single.lifecycle != 'CLAIMED') {
+          return DeviceCloudReadiness.unavailable;
+        }
+      } on FormatException {
+        return DeviceCloudReadiness.unavailable;
+      } on StateError {
+        return DeviceCloudReadiness.unavailable;
+      } on DioException {
+        // A short transport interruption is allowed within the bounded poll.
+      }
+      if (!DateTime.now().toUtc().isBefore(deadline)) break;
+      await delay(pollInterval);
+    } while (DateTime.now().toUtc().isBefore(deadline));
+    return DeviceCloudReadiness.timedOut;
   }
 
   Future<PreparedPhysicalOnboarding> exchangeQrOnboarding({

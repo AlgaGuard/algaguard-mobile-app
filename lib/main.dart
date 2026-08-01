@@ -966,21 +966,24 @@ class _ClaimScreenState extends ConsumerState<ClaimScreen> {
   );
 }
 
-class BleProvisioningScreen extends StatefulWidget {
+class BleProvisioningScreen extends ConsumerStatefulWidget {
   const BleProvisioningScreen({
     super.key,
     required this.claim,
     required this.session,
     this.retryScreenBuilder,
+    this.cloudReadinessProbe,
   });
   final QrClaim claim;
   final ProvisioningSession session;
   final WidgetBuilder? retryScreenBuilder;
+  final Future<DeviceCloudReadiness> Function()? cloudReadinessProbe;
   @override
-  State<BleProvisioningScreen> createState() => _BleProvisioningScreenState();
+  ConsumerState<BleProvisioningScreen> createState() =>
+      _BleProvisioningScreenState();
 }
 
-class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
+class _BleProvisioningScreenState extends ConsumerState<BleProvisioningScreen> {
   final _ssid = TextEditingController();
   final _password = TextEditingController();
   String _state = 'Ready to discover the matching AlgaGuard BLE service.';
@@ -1003,10 +1006,19 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
         },
       );
       if (mounted) {
-        setState(
-          () =>
-              _state = 'Accepted by device. Waiting for device network status.',
-        );
+        setState(() => _state = 'Accepted by device. Verifying cloud setup...');
+      }
+      final readiness = await _waitForCloudReadiness();
+      if (mounted) {
+        setState(() {
+          _state = switch (readiness) {
+            DeviceCloudReadiness.ready => 'Device connected to cloud.',
+            DeviceCloudReadiness.timedOut =>
+              'Wi-Fi was accepted, but cloud setup did not finish in time.',
+            DeviceCloudReadiness.unavailable =>
+              'Wi-Fi was accepted, but cloud setup could not be verified.',
+          };
+        });
       }
     } on BleProvisioningWireException catch (error) {
       if (mounted) {
@@ -1026,6 +1038,25 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
       _password.clear();
       if (mounted) setState(() => _working = false);
     }
+  }
+
+  Future<DeviceCloudReadiness> _waitForCloudReadiness() async {
+    if (widget.cloudReadinessProbe != null) {
+      return widget.cloudReadinessProbe!();
+    }
+    final store = const TokenStore(FlutterSecureStorage());
+    final token = await store.readAccessToken();
+    final organizationId = await store.readSelectedOrganization();
+    if (token == null || organizationId == null) {
+      return DeviceCloudReadiness.unavailable;
+    }
+    return PlatformApi(
+      ref.read(environmentProvider).apiBaseUrl,
+    ).waitForDeviceCloudReadiness(
+      accessToken: token,
+      organizationId: organizationId,
+      deviceId: widget.claim.deviceId,
+    );
   }
 
   String _safeBleFailureText(String code) => switch (code) {
