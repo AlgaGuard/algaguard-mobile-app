@@ -776,7 +776,10 @@ class FlutterBlueProvisioner implements BleProvisioner {
         }
       }
 
-      statusSubscription = statusCharacteristic.lastValueStream.listen(
+      // onValueReceived emits actual reads and notifications. lastValueStream
+      // also replays an initially empty cache entry, which is not a device
+      // status and must not be fed to the strict status decoder.
+      statusSubscription = statusCharacteristic.onValueReceived.listen(
         observeStatus,
       );
       connectionSubscription = device.connectionState.listen((connectionState) {
