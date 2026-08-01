@@ -182,18 +182,18 @@ void main() {
     },
   );
 
-  test('observes actual BLE status events without replaying an empty cache', () {
-    final source = File('lib/src/platform_clients.dart').readAsStringSync();
+  test(
+    'observes actual BLE status events without replaying an empty cache',
+    () {
+      final source = File('lib/src/platform_clients.dart').readAsStringSync();
 
-    expect(
-      source,
-      contains('statusCharacteristic.onValueReceived.listen'),
-    );
-    expect(
-      source,
-      isNot(contains('statusCharacteristic.lastValueStream.listen')),
-    );
-  });
+      expect(source, contains('statusCharacteristic.onValueReceived.listen'));
+      expect(
+        source,
+        isNot(contains('statusCharacteristic.lastValueStream.listen')),
+      );
+    },
+  );
 
   test('terminal failure clears pending frames without an automatic retry', () {
     final writer = SequentialFrameWriter([
