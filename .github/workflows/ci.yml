@@ -23,6 +23,7 @@ jobs:
         run: >-
           flutter build apk --debug
           --dart-define=FLAVOR=development
+          --dart-define=ALGAGUARD_ENABLE_QR_ONBOARDING=true
           --dart-define=API_BASE_URL=https://api.algaguard.bosilu.dev/v1
           --dart-define=WEBSOCKET_URL=wss://realtime.algaguard.bosilu.dev/realtime
           --dart-define=KEYCLOAK_ISSUER=https://auth.algaguard.bosilu.dev/realms/algaguard
