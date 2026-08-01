@@ -742,27 +742,7 @@ class FlutterBlueProvisioner implements BleProvisioner {
     var frames = <List<int>>[];
     SequentialFrameWriter? writer;
     try {
-      final services = await device.discoverServices();
-      final contractServices = services
-          .map(
-            (service) => BleServiceContract(
-              uuid: service.uuid.toString(),
-              characteristics: service.characteristics
-                  .map(
-                    (characteristic) => BleCharacteristicContract(
-                      uuid: characteristic.uuid.toString(),
-                      canRead: characteristic.properties.read,
-                      canWriteWithResponse: characteristic.properties.write,
-                      canWriteWithoutResponse:
-                          characteristic.properties.writeWithoutResponse,
-                      canNotify: characteristic.properties.notify,
-                    ),
-                  )
-                  .toList(growable: false),
-            ),
-          )
-          .toList(growable: false);
-      BleProvisioningWire.selectCharacteristics(contractServices);
+      final services = await _discoverProvisioningServices(device);
       final service = services.firstWhere(
         (candidate) =>
             candidate.uuid.toString().toLowerCase() ==
@@ -857,6 +837,52 @@ class FlutterBlueProvisioner implements BleProvisioner {
       }
       await device.disconnect();
     }
+  }
+
+  Future<List<BluetoothService>> _discoverProvisioningServices(
+    BluetoothDevice device,
+  ) async {
+    BleProvisioningWireException? lastContractError;
+    for (var attempt = 0; attempt < 2; attempt += 1) {
+      final services = await device.discoverServices();
+      final contractServices = services
+          .map(
+            (service) => BleServiceContract(
+              uuid: service.uuid.toString(),
+              characteristics: service.characteristics
+                  .map(
+                    (characteristic) => BleCharacteristicContract(
+                      uuid: characteristic.uuid.toString(),
+                      canRead: characteristic.properties.read,
+                      canWriteWithResponse: characteristic.properties.write,
+                      canWriteWithoutResponse:
+                          characteristic.properties.writeWithoutResponse,
+                      canNotify: characteristic.properties.notify,
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          )
+          .toList(growable: false);
+      try {
+        BleProvisioningWire.selectCharacteristics(contractServices);
+        return services;
+      } on BleProvisioningWireException catch (error) {
+        lastContractError = error;
+        if (attempt == 0 && error.code == 'SERVICE_NOT_FOUND') {
+          try {
+            await device.clearGattCache();
+            await Future<void>.delayed(const Duration(milliseconds: 500));
+            continue;
+          } on FlutterBluePlusException {
+            // Non-Android or cache-clear failures are not secret-bearing.
+          }
+        }
+        rethrow;
+      }
+    }
+    throw lastContractError ??
+        const BleProvisioningWireException('SERVICE_NOT_FOUND');
   }
 
   int _nextMessageId() {
