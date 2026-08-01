@@ -872,10 +872,13 @@ class FlutterBlueProvisioner implements BleProvisioner {
         if (attempt == 0 && error.code == 'SERVICE_NOT_FOUND') {
           try {
             await device.clearGattCache();
+            await device.disconnect();
+            await Future<void>.delayed(const Duration(milliseconds: 750));
+            await device.connect(timeout: const Duration(seconds: 15));
             await Future<void>.delayed(const Duration(milliseconds: 500));
             continue;
-          } on FlutterBluePlusException {
-            // Non-Android or cache-clear failures are not secret-bearing.
+          } catch (_) {
+            // Cache refresh/reconnect failures contain no provisioning payload.
           }
         }
         rethrow;
