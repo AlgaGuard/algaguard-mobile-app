@@ -478,10 +478,6 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     return matches.length == 1 ? matches.single : null;
   }
 
-  List<DeviceSummary> get _claimedOwnedDevices => _devices
-      .where((device) => device.lifecycle == 'CLAIMED')
-      .toList(growable: false);
-
   Future<void> _preparePhysicalOnboarding(DeviceSummary device) async {
     if (_preparing || _attempted) return;
     PreparedPhysicalOnboarding? pending;
@@ -568,8 +564,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
           ),
         if (!_loading && _devices.isEmpty)
           const ListTile(title: Text('No devices in this organization')),
-        if (qrOnboardingAvailable(releaseMode: kReleaseMode) &&
-            _claimedOwnedDevices.isNotEmpty)
+        if (qrOnboardingAvailable(releaseMode: kReleaseMode))
           Padding(
             padding: const EdgeInsets.all(16),
             child: FilledButton.icon(
@@ -581,7 +576,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                     builder: (_) => QrOnboardingScanScreen(
                       api: authorized.$1,
                       accessToken: authorized.$2,
-                      claimedDevices: _claimedOwnedDevices,
+                      organizationId: authorized.$3,
                     ),
                   ),
                 );
@@ -643,12 +638,12 @@ class QrOnboardingScanScreen extends StatefulWidget {
     super.key,
     required this.api,
     required this.accessToken,
-    required this.claimedDevices,
+    required this.organizationId,
   });
 
   final PlatformApi api;
   final String accessToken;
-  final List<DeviceSummary> claimedDevices;
+  final String organizationId;
 
   @override
   State<QrOnboardingScanScreen> createState() => _QrOnboardingScanScreenState();
@@ -676,16 +671,8 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
     if (_handled) return;
     _handled = true;
     QrOnboardingInvitation invitation;
-    late final DeviceSummary device;
     try {
       invitation = QrOnboardingCodec.decode(raw);
-      final matches = widget.claimedDevices
-          .where((candidate) => candidate.deviceId == invitation.deviceId)
-          .toList(growable: false);
-      if (matches.length != 1) {
-        throw const FormatException('DEVICE_MISMATCH');
-      }
-      device = matches.single;
     } on FormatException catch (error) {
       if (mounted) {
         setState(() {
@@ -702,7 +689,7 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
       if (mounted) setState(() => _state = QrOnboardingScanState.preparing);
       final prepared = await widget.api.exchangeQrOnboarding(
         accessToken: widget.accessToken,
-        device: device,
+        organizationId: widget.organizationId,
         invitation: invitation,
       );
       if (!mounted) {
@@ -718,7 +705,7 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
             retryScreenBuilder: (_) => QrOnboardingScanScreen(
               api: widget.api,
               accessToken: widget.accessToken,
-              claimedDevices: widget.claimedDevices,
+              organizationId: widget.organizationId,
             ),
           ),
         ),

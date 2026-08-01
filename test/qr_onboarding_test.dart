@@ -160,6 +160,63 @@ void main() {
     );
   });
 
+  test('scan-first exchange works with zero pre-existing devices', () async {
+    final now = DateTime.now().toUtc();
+    var calls = 0;
+    final dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            calls++;
+            final body = Map<String, dynamic>.from(options.data as Map);
+            expect(
+              body['schema'],
+              'urn:algaguard:schema:onboarding:qr-onboarding-exchange-request:v2',
+            );
+            expect(body['schemaVersion'], '2.0.0');
+            expect(body['registrationMode'], 'DEVELOPMENT_SCAN_FIRST');
+            expect(body['organizationId'], isNotNull);
+            expect(body.containsKey('ownershipVersion'), false);
+            handler.resolve(
+              Response<Object>(
+                requestOptions: options,
+                statusCode: 201,
+                headers: Headers.fromMap({
+                  'cache-control': ['no-store'],
+                }),
+                data: response(now),
+              ),
+            );
+          },
+        ),
+      );
+    final prepared =
+        await PlatformApi(
+          Uri.parse('https://safe.example'),
+          client: dio,
+        ).exchangeQrOnboarding(
+          accessToken: 'opaque',
+          organizationId: '10000000-0000-4000-8000-000000000001',
+          invitation: QrOnboardingCodec.decode(invitation(now), now: now),
+        );
+    expect(calls, 1);
+    expect(prepared.session.retainsToken, true);
+    prepared.session.clear();
+  });
+
+  test('scan-first and existing-device modes cannot be mixed', () async {
+    final now = DateTime.now().toUtc();
+    await expectLater(
+      PlatformApi(Uri.parse('https://safe.example')).exchangeQrOnboarding(
+        accessToken: 'opaque',
+        device: device,
+        organizationId: '10000000-0000-4000-8000-000000000001',
+        invitation: QrOnboardingCodec.decode(invitation(now), now: now),
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('6 exchange requires no-store and exact response fields', () async {
     final now = DateTime.now().toUtc();
     final dio = Dio()

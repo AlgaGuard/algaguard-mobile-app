@@ -19,3 +19,13 @@ device and moves the returned session directly into the existing in-memory
 onboarding abstraction. It creates no claim/device/ownership record, persists
 no bootstrap token, and navigates to `Development session approval`. Logout,
 restart, terminal failure, and completion discard the in-memory session.
+
+The development QR flow is compiled only with
+`ALGAGUARD_ENABLE_QR_ONBOARDING=true`. In that build, `Scan device QR` remains
+available even when the selected organization has no devices. A valid physical
+invitation is exchanged once using the authenticated organization-scoped v2
+contract; the resulting bootstrap session and binding grant remain in memory
+and feed the existing BLE provisioning controller. QR contents, session values,
+and Wi-Fi values are never displayed, persisted, or logged. Release builds hide
+the entry point, and the older owned-device/manual handoff path remains a
+disabled fallback.

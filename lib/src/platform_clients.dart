@@ -421,11 +421,18 @@ class PlatformApi {
 
   Future<PreparedPhysicalOnboarding> exchangeQrOnboarding({
     required String accessToken,
-    required DeviceSummary device,
+    DeviceSummary? device,
+    String? organizationId,
     required QrOnboardingInvitation invitation,
   }) async {
-    if (device.lifecycle != 'CLAIMED' ||
-        device.deviceId != invitation.deviceId) {
+    final scanFirst = device == null && organizationId != null;
+    final existingDevice = device != null && organizationId == null;
+    if (!scanFirst && !existingDevice) {
+      throw const FormatException('QR_EXCHANGE_MODE_INVALID');
+    }
+    if (device != null &&
+        (device.lifecycle != 'CLAIMED' ||
+            device.deviceId != invitation.deviceId)) {
       throw const FormatException('QR_DEVICE_MISMATCH');
     }
     late final Response<Object> response;
@@ -436,13 +443,22 @@ class PlatformApi {
           headers: {'Authorization': 'Bearer $accessToken'},
           followRedirects: false,
         ),
-        data: {
-          'schema':
-              'urn:algaguard:schema:onboarding:qr-onboarding-exchange-request:v1',
-          'schemaVersion': '1.0.0',
-          'invitationUri': invitation.uri,
-          'ownershipVersion': device.ownershipVersion,
-        },
+        data: scanFirst
+            ? {
+                'schema':
+                    'urn:algaguard:schema:onboarding:qr-onboarding-exchange-request:v2',
+                'schemaVersion': '2.0.0',
+                'invitationUri': invitation.uri,
+                'organizationId': organizationId,
+                'registrationMode': 'DEVELOPMENT_SCAN_FIRST',
+              }
+            : {
+                'schema':
+                    'urn:algaguard:schema:onboarding:qr-onboarding-exchange-request:v1',
+                'schemaVersion': '1.0.0',
+                'invitationUri': invitation.uri,
+                'ownershipVersion': device!.ownershipVersion,
+              },
       );
     } on DioException catch (failure) {
       throw QrOnboardingExchangeException(
