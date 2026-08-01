@@ -657,6 +657,10 @@ class QrOnboardingScanScreen extends StatefulWidget {
 class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
   QrOnboardingScanState _state = QrOnboardingScanState.scanning;
   bool _handled = false;
+  bool get _canScanAgain =>
+      _state == QrOnboardingScanState.expired ||
+      _state == QrOnboardingScanState.unsupported ||
+      _state == QrOnboardingScanState.failed;
 
   String get _safeStateText => switch (_state) {
     QrOnboardingScanState.scanning => 'Scanning',
@@ -684,11 +688,12 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
       device = matches.single;
     } on FormatException catch (error) {
       if (mounted) {
-        setState(
-          () => _state = error.message == 'INVITATION_EXPIRED'
+        setState(() {
+          _state = error.message == 'INVITATION_EXPIRED'
               ? QrOnboardingScanState.expired
-              : QrOnboardingScanState.unsupported,
-        );
+              : QrOnboardingScanState.unsupported;
+          _handled = false;
+        });
       }
       return;
     }
@@ -710,20 +715,38 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
           builder: (_) => BleProvisioningScreen(
             claim: prepared.claim,
             session: prepared.session,
+            retryScreenBuilder: (_) => QrOnboardingScanScreen(
+              api: widget.api,
+              accessToken: widget.accessToken,
+              claimedDevices: widget.claimedDevices,
+            ),
           ),
         ),
       );
     } on QrOnboardingExchangeException catch (error) {
       if (mounted) {
-        setState(
-          () => _state = error.failure == QrOnboardingExchangeFailure.expired
+        setState(() {
+          _state = error.failure == QrOnboardingExchangeFailure.expired
               ? QrOnboardingScanState.expired
-              : QrOnboardingScanState.failed,
-        );
+              : QrOnboardingScanState.failed;
+          _handled = false;
+        });
       }
     } catch (_) {
-      if (mounted) setState(() => _state = QrOnboardingScanState.failed);
+      if (mounted) {
+        setState(() {
+          _state = QrOnboardingScanState.failed;
+          _handled = false;
+        });
+      }
     }
+  }
+
+  void _scanFreshQr() {
+    setState(() {
+      _handled = false;
+      _state = QrOnboardingScanState.scanning;
+    });
   }
 
   @override
@@ -747,7 +770,23 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
         ),
         Padding(
           padding: const EdgeInsets.all(24),
-          child: Text(_safeStateText, key: const Key('qr-onboarding-state')),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(_safeStateText, key: const Key('qr-onboarding-state')),
+              if (_canScanAgain) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Press Select on the ESP32 for a fresh QR, then scan again.',
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton(
+                  onPressed: _scanFreshQr,
+                  child: const Text('Scan fresh QR'),
+                ),
+              ],
+            ],
+          ),
         ),
       ],
     ),
@@ -932,9 +971,11 @@ class BleProvisioningScreen extends StatefulWidget {
     super.key,
     required this.claim,
     required this.session,
+    this.retryScreenBuilder,
   });
   final QrClaim claim;
   final ProvisioningSession session;
+  final WidgetBuilder? retryScreenBuilder;
   @override
   State<BleProvisioningScreen> createState() => _BleProvisioningScreenState();
 }
@@ -944,6 +985,7 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
   final _password = TextEditingController();
   String _state = 'Ready to discover the matching AlgaGuard BLE service.';
   bool _working = false;
+  bool _freshAttemptRequested = false;
   Future<void> _provision() async {
     setState(() {
       _working = true;
@@ -1023,6 +1065,23 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
     return 'unexpected BLE operation failure';
   }
 
+  void _startOverWithFreshQr() {
+    widget.session.clear();
+    _ssid.clear();
+    _password.clear();
+    if (widget.retryScreenBuilder != null) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(builder: widget.retryScreenBuilder!),
+      );
+      return;
+    }
+    setState(() {
+      _freshAttemptRequested = true;
+      _state =
+          'Current onboarding session cleared. Press Select on the ESP32 for a fresh QR, then scan again from Devices.';
+    });
+  }
+
   @override
   void dispose() {
     widget.session.clear();
@@ -1054,6 +1113,15 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
           onPressed: _working ? null : _provision,
           child: Text(_working ? 'Provisioning…' : 'Send credentials over BLE'),
         ),
+        const SizedBox(height: 8),
+        OutlinedButton(
+          onPressed: _working ? null : _startOverWithFreshQr,
+          child: const Text('Start over with fresh QR'),
+        ),
+        if (_freshAttemptRequested)
+          const Text(
+            'The previous session was cleared locally and cannot be reused.',
+          ),
         const SizedBox(height: 12),
         const Text(
           'Password remains only in this form for the active BLE call and is cleared after success or failure. Real BLE requires a phone and ESP32-S3.',
