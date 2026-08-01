@@ -745,17 +745,17 @@ class FlutterBlueProvisioner implements BleProvisioner {
       final services = await _discoverProvisioningServices(device);
       final service = services.firstWhere(
         (candidate) =>
-            candidate.uuid.toString().toLowerCase() ==
+            canonicalFlutterBlueUuid(candidate.uuid) ==
             bleProvisioningServiceUuid,
       );
       final request = service.characteristics.firstWhere(
         (candidate) =>
-            candidate.uuid.toString().toLowerCase() ==
+            canonicalFlutterBlueUuid(candidate.uuid) ==
             bleProvisioningRequestUuid,
       );
       statusCharacteristic = service.characteristics.firstWhere(
         (candidate) =>
-            candidate.uuid.toString().toLowerCase() ==
+            canonicalFlutterBlueUuid(candidate.uuid) ==
             bleProvisioningStatusUuid,
       );
 
@@ -848,11 +848,11 @@ class FlutterBlueProvisioner implements BleProvisioner {
       final contractServices = services
           .map(
             (service) => BleServiceContract(
-              uuid: service.uuid.toString(),
+              uuid: canonicalFlutterBlueUuid(service.uuid),
               characteristics: service.characteristics
                   .map(
                     (characteristic) => BleCharacteristicContract(
-                      uuid: characteristic.uuid.toString(),
+                      uuid: canonicalFlutterBlueUuid(characteristic.uuid),
                       canRead: characteristic.properties.read,
                       canWriteWithResponse: characteristic.properties.write,
                       canWriteWithoutResponse:
@@ -919,7 +919,7 @@ class FlutterBlueProvisioner implements BleProvisioner {
 
   bool _matchesProvisioningAdvert(ScanResult result) {
     final serviceMatch = result.advertisementData.serviceUuids.any(
-      (uuid) => uuid.toString().toLowerCase() == bleProvisioningServiceUuid,
+      (uuid) => canonicalFlutterBlueUuid(uuid) == bleProvisioningServiceUuid,
     );
     if (serviceMatch) return true;
     final advertisedName = result.advertisementData.advName.trim();
@@ -1140,3 +1140,5 @@ class PhysicalSessionApprovalException implements Exception {
   @override
   String toString() => 'PhysicalSessionApprovalException(${category.name})';
 }
+
+String canonicalFlutterBlueUuid(Guid uuid) => uuid.str128.toLowerCase();

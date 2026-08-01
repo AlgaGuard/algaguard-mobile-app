@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:algaguard_mobile_app/src/ble_provisioning_wire.dart';
+import 'package:algaguard_mobile_app/src/platform_clients.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _sessionId = '50000000-0000-4000-8000-000000000001';
@@ -26,6 +28,22 @@ BleCharacteristicContract _status({bool writable = false}) =>
     );
 
 void main() {
+  test(
+    'normalizes FlutterBluePlus shorthand UUIDs to the canonical contract',
+    () {
+      expect(Guid('a1a0').toString(), 'a1a0');
+      expect(
+        canonicalFlutterBlueUuid(Guid('a1a0')),
+        bleProvisioningServiceUuid,
+      );
+      expect(
+        canonicalFlutterBlueUuid(Guid('a1a1')),
+        bleProvisioningRequestUuid,
+      );
+      expect(canonicalFlutterBlueUuid(Guid('a1a2')), bleProvisioningStatusUuid);
+    },
+  );
+
   test('selects the exact provisioning service and characteristics', () {
     final selection = BleProvisioningWire.selectCharacteristics([
       BleServiceContract(
