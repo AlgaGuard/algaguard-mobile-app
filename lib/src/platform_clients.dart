@@ -701,21 +701,32 @@ class FlutterBlueProvisioner implements BleProvisioner {
       throw const BleProvisioningWireException('SERVICE_NOT_FOUND');
     }
     final serviceGuid = Guid(bleProvisioningServiceUuid);
-    await FlutterBluePlus.startScan(
-      withServices: [serviceGuid],
-      timeout: const Duration(seconds: 15),
-    );
-    final results = await FlutterBluePlus.scanResults
-        .where((items) => items.isNotEmpty)
-        .first;
-    final matchingResults = results.where(
-      (result) => result.advertisementData.serviceUuids.contains(serviceGuid),
-    );
-    if (matchingResults.isEmpty) {
-      throw const BleProvisioningWireException('SERVICE_NOT_FOUND');
+    late final ScanResult matchingResult;
+    try {
+      await FlutterBluePlus.stopScan();
+      await FlutterBluePlus.startScan(
+        withServices: [serviceGuid],
+        timeout: const Duration(seconds: 15),
+      );
+      matchingResult = await FlutterBluePlus.scanResults
+          .map(
+            (results) => results.where(
+              (result) =>
+                  result.advertisementData.serviceUuids.contains(serviceGuid),
+            ),
+          )
+          .where((results) => results.isNotEmpty)
+          .map((results) => results.first)
+          .first
+          .timeout(
+            const Duration(seconds: 16),
+            onTimeout: () =>
+                throw const BleProvisioningWireException('SERVICE_NOT_FOUND'),
+          );
+    } finally {
+      await FlutterBluePlus.stopScan();
     }
-    final device = matchingResults.first.device;
-    await FlutterBluePlus.stopScan();
+    final device = matchingResult.device;
     await device.connect(timeout: const Duration(seconds: 15));
 
     StreamSubscription<List<int>>? statusSubscription;
