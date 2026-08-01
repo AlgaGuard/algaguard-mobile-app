@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:algaguard_mobile_app/src/environment.dart';
 import 'package:algaguard_mobile_app/src/demo_telemetry.dart';
 import 'package:algaguard_mobile_app/src/demo_telemetry_view.dart';
@@ -10,6 +12,7 @@ import 'package:algaguard_mobile_app/src/qr_onboarding.dart';
 import 'package:algaguard_mobile_app/src/ble_provisioning_wire.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -970,11 +973,11 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
               'Provisioning failed safely: ${_safeBleFailureText(error.code)}.',
         );
       }
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
         setState(
           () => _state =
-              'Provisioning failed. Verify the physical BLE device and retry.',
+              'Provisioning failed safely: ${_safeUnexpectedProvisioningFailure(error)}.',
         );
       }
     } finally {
@@ -1002,6 +1005,23 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
     'CANCELLED' => 'device cancelled',
     _ => 'device rejected provisioning',
   };
+
+  String _safeUnexpectedProvisioningFailure(Object error) {
+    if (error is FlutterBluePlusException) {
+      return switch (error.function) {
+        'scan' => 'Bluetooth scan failed',
+        'connect' => 'BLE connection failed',
+        'discoverServices' => 'BLE service discovery failed',
+        'readCharacteristic' => 'BLE status read failed',
+        'writeCharacteristic' => 'BLE frame write failed',
+        'setNotifyValue' => 'BLE notifications failed',
+        _ => 'Bluetooth operation failed',
+      };
+    }
+    if (error is TimeoutException) return 'BLE operation timed out';
+    if (error is FormatException) return 'local provisioning data invalid';
+    return 'unexpected BLE operation failure';
+  }
 
   @override
   void dispose() {
