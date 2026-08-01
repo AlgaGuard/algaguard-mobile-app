@@ -218,20 +218,28 @@ class BleProvisioningWire {
     return payload;
   }
 
-  static List<List<int>> framePayload(List<int> payload, int messageId) {
-    if (payload.isEmpty || payload.length > maxPayloadBytes || messageId <= 0) {
+  static List<List<int>> framePayload(
+    List<int> payload,
+    int messageId, {
+    int fragmentPayloadLimit = maxFragmentPayload,
+  }) {
+    if (payload.isEmpty ||
+        payload.length > maxPayloadBytes ||
+        messageId <= 0 ||
+        fragmentPayloadLimit <= 0 ||
+        fragmentPayloadLimit > maxFragmentPayload) {
       throw const BleProvisioningWireException('INVALID_FRAME_INPUT');
     }
     final fragmentCount =
-        (payload.length + maxFragmentPayload - 1) ~/ maxFragmentPayload;
+        (payload.length + fragmentPayloadLimit - 1) ~/ fragmentPayloadLimit;
     if (fragmentCount == 0 || fragmentCount > 0xffff) {
       throw const BleProvisioningWireException('INVALID_FRAME_INPUT');
     }
     final frames = <List<int>>[];
     for (var index = 0; index < fragmentCount; index++) {
-      final start = index * maxFragmentPayload;
-      final end = start + maxFragmentPayload < payload.length
-          ? start + maxFragmentPayload
+      final start = index * fragmentPayloadLimit;
+      final end = start + fragmentPayloadLimit < payload.length
+          ? start + fragmentPayloadLimit
           : payload.length;
       final fragment = payload.sublist(start, end);
       if (fragment.isEmpty && index + 1 != fragmentCount) {

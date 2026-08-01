@@ -810,7 +810,15 @@ class FlutterBlueProvisioner implements BleProvisioner {
         password: password,
         bindingGrant: bindingGrant,
       );
-      frames = BleProvisioningWire.framePayload(payload, _nextMessageId());
+      final fragmentPayloadLimit = min(
+        BleProvisioningWire.maxFragmentPayload,
+        device.mtuNow - 3 - BleProvisioningWire.headerLength,
+      );
+      frames = BleProvisioningWire.framePayload(
+        payload,
+        _nextMessageId(),
+        fragmentPayloadLimit: fragmentPayloadLimit,
+      );
       writer = SequentialFrameWriter(frames);
       while (writer.hasPending) {
         final frame = writer.current;

@@ -131,6 +131,22 @@ void main() {
       ),
       throwsA(isA<BleProvisioningWireException>()),
     );
+
+    final mtuBoundFrames = BleProvisioningWire.framePayload(
+      List<int>.filled(500, 1),
+      2,
+      fragmentPayloadLimit: 242,
+    );
+    expect(mtuBoundFrames, hasLength(3));
+    expect(mtuBoundFrames.every((frame) => frame.length <= 253), isTrue);
+    expect(
+      () => BleProvisioningWire.framePayload(
+        [1],
+        3,
+        fragmentPayloadLimit: BleProvisioningWire.maxFragmentPayload + 1,
+      ),
+      throwsA(isA<BleProvisioningWireException>()),
+    );
   });
 
   test('advances request frames only after each write acknowledgement', () {
