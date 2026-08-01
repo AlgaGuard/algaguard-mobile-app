@@ -710,18 +710,18 @@ class FlutterBlueProvisioner implements BleProvisioner {
       );
       matchingResult = await FlutterBluePlus.scanResults
           .map(
-            (results) => results.where(
-              (result) =>
-                  result.advertisementData.serviceUuids.contains(serviceGuid),
-            ),
+            (results) =>
+                results.where((result) => _matchesProvisioningAdvert(result)),
           )
           .where((results) => results.isNotEmpty)
           .map((results) => results.first)
           .first
           .timeout(
             const Duration(seconds: 16),
-            onTimeout: () =>
-                throw const BleProvisioningWireException('SERVICE_NOT_FOUND'),
+            onTimeout: () async {
+              await FlutterBluePlus.stopScan();
+              return _scanByProvisioningNameFallback();
+            },
           );
     } finally {
       await FlutterBluePlus.stopScan();
@@ -865,6 +865,38 @@ class FlutterBlueProvisioner implements BleProvisioner {
       if (_usedMessageIds.add(messageId)) return messageId;
     }
     throw const BleProvisioningWireException('MESSAGE_ID_UNAVAILABLE');
+  }
+
+  Future<ScanResult> _scanByProvisioningNameFallback() async {
+    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 8));
+    try {
+      return await FlutterBluePlus.scanResults
+          .map(
+            (results) =>
+                results.where((result) => _matchesProvisioningAdvert(result)),
+          )
+          .where((results) => results.isNotEmpty)
+          .map((results) => results.first)
+          .first
+          .timeout(
+            const Duration(seconds: 9),
+            onTimeout: () =>
+                throw const BleProvisioningWireException('SERVICE_NOT_FOUND'),
+          );
+    } finally {
+      await FlutterBluePlus.stopScan();
+    }
+  }
+
+  bool _matchesProvisioningAdvert(ScanResult result) {
+    final serviceMatch = result.advertisementData.serviceUuids.any(
+      (uuid) => uuid.toString().toLowerCase() == bleProvisioningServiceUuid,
+    );
+    if (serviceMatch) return true;
+    final advertisedName = result.advertisementData.advName.trim();
+    final platformName = result.device.platformName.trim();
+    return advertisedName == 'AlgaGuard-Setup' ||
+        platformName == 'AlgaGuard-Setup';
   }
 }
 

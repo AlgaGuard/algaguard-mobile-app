@@ -7,6 +7,7 @@ import 'package:algaguard_mobile_app/src/realtime_controller.dart';
 import 'package:algaguard_mobile_app/src/secure_transport_preflight.dart';
 import 'package:algaguard_mobile_app/src/platform_clients.dart';
 import 'package:algaguard_mobile_app/src/qr_onboarding.dart';
+import 'package:algaguard_mobile_app/src/ble_provisioning_wire.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -962,6 +963,13 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
               _state = 'Accepted by device. Waiting for device network status.',
         );
       }
+    } on BleProvisioningWireException catch (error) {
+      if (mounted) {
+        setState(
+          () => _state =
+              'Provisioning failed safely: ${_safeBleFailureText(error.code)}.',
+        );
+      }
     } catch (_) {
       if (mounted) {
         setState(
@@ -974,6 +982,26 @@ class _BleProvisioningScreenState extends State<BleProvisioningScreen> {
       if (mounted) setState(() => _working = false);
     }
   }
+
+  String _safeBleFailureText(String code) => switch (code) {
+    'SERVICE_NOT_FOUND' => 'BLE service not found',
+    'REQUEST_CHARACTERISTIC_NOT_FOUND' => 'request characteristic missing',
+    'STATUS_CHARACTERISTIC_NOT_FOUND' => 'status characteristic missing',
+    'REQUIRED_PROPERTIES_MISMATCH' => 'BLE service shape mismatch',
+    'DISCONNECTED' => 'device disconnected',
+    'STATUS_TOO_LARGE' || 'UNSAFE_STATUS' => 'unsafe device status',
+    'INVALID_PROVISIONING_FIELDS' => 'invalid local input',
+    'PAYLOAD_TOO_LARGE' => 'request too large',
+    'INVALID_FRAME_INPUT' => 'BLE frame preparation failed',
+    'MESSAGE_ID_UNAVAILABLE' => 'message identifier unavailable',
+    'EXPIRED' => 'session expired',
+    'REPLAYED' => 'session replay rejected',
+    'DEVICE_MISMATCH' => 'device mismatch',
+    'SESSION_REJECTED' => 'session rejected',
+    'TIMED_OUT' => 'device timed out',
+    'CANCELLED' => 'device cancelled',
+    _ => 'device rejected provisioning',
+  };
 
   @override
   void dispose() {
