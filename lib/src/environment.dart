@@ -11,6 +11,7 @@ class AppEnvironment {
     required this.keycloakClientId,
     required this.redirectUri,
     required this.organizationId,
+    this.fcm = const FcmEnvironment.disabled(),
   });
   final EnvironmentFlavor flavor;
   final Uri apiBaseUrl;
@@ -19,6 +20,7 @@ class AppEnvironment {
   final String keycloakClientId;
   final String redirectUri;
   final String organizationId;
+  final FcmEnvironment fcm;
 
   void validateForMode({required bool releaseMode, required bool localHttps}) {
     if (releaseMode && localHttps) {
@@ -85,11 +87,26 @@ class AppEnvironment {
         'ORGANIZATION_ID',
         defaultValue: '10000000-0000-4000-8000-000000000001',
       ),
+      fcm: FcmEnvironment.fromDefines(),
     );
     environment.validateForMode(
       releaseMode: kReleaseMode,
       localHttps: localHttps,
     );
     return environment;
+  }
+}
+
+class FcmEnvironment {
+  const FcmEnvironment({required this.enabled});
+
+  const FcmEnvironment.disabled() : this(enabled: false);
+
+  final bool enabled;
+
+  static FcmEnvironment fromDefines() {
+    return const FcmEnvironment(
+      enabled: bool.fromEnvironment('ALGAGUARD_ENABLE_FCM'),
+    );
   }
 }

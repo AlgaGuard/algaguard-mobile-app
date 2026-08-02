@@ -30,18 +30,34 @@ class TokenStore {
   final FlutterSecureStorage storage;
   static const _accessTokenKey = 'oidc_access_token';
   static const _refreshTokenKey = 'oidc_refresh_token';
+  static const _accessTokenExpiryKey = 'oidc_access_token_expiry';
   static const _selectedOrganizationKey = 'selected_organization_id';
+  static const _pushInstallationKey = 'push_installation_id';
 
-  Future<void> save({required String accessToken, String? refreshToken}) async {
+  Future<void> save({
+    required String accessToken,
+    String? refreshToken,
+    DateTime? accessTokenExpiresAt,
+  }) async {
     await storage.write(key: _accessTokenKey, value: accessToken);
     if (refreshToken != null) {
       await storage.write(key: _refreshTokenKey, value: refreshToken);
+    }
+    if (accessTokenExpiresAt != null) {
+      await storage.write(
+        key: _accessTokenExpiryKey,
+        value: accessTokenExpiresAt.toUtc().toIso8601String(),
+      );
     }
   }
 
   // Keep credentials in secure storage; callers receive them only when needed.
   Future<String?> readAccessToken() => storage.read(key: _accessTokenKey);
   Future<String?> readRefreshToken() => storage.read(key: _refreshTokenKey);
+  Future<DateTime?> readAccessTokenExpiry() async {
+    final value = await storage.read(key: _accessTokenExpiryKey);
+    return value == null ? null : DateTime.tryParse(value)?.toUtc();
+  }
 
   Future<void> selectOrganization(String organizationId) async {
     if (!RegExp(
@@ -56,9 +72,30 @@ class TokenStore {
   Future<String?> readSelectedOrganization() =>
       storage.read(key: _selectedOrganizationKey);
 
+  Future<String> readOrCreatePushInstallationId() async {
+    final existing = await storage.read(key: _pushInstallationKey);
+    if (existing != null &&
+        RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        ).hasMatch(existing)) {
+      return existing;
+    }
+    final created = _uuidV4();
+    await storage.write(key: _pushInstallationKey, value: created);
+    return created;
+  }
+
+  Future<String?> readPushInstallationId() =>
+      storage.read(key: _pushInstallationKey);
+
+  Future<void> clearPushInstallationId() =>
+      storage.delete(key: _pushInstallationKey);
+
   Future<void> clear() async {
     await storage.delete(key: _accessTokenKey);
     await storage.delete(key: _refreshTokenKey);
+    await storage.delete(key: _accessTokenExpiryKey);
     await storage.delete(key: _selectedOrganizationKey);
   }
 }
@@ -128,6 +165,7 @@ class OidcClient {
     await store.save(
       accessToken: response.accessToken!,
       refreshToken: response.refreshToken,
+      accessTokenExpiresAt: response.accessTokenExpirationDateTime,
     );
   }
 
@@ -146,25 +184,35 @@ class OidcClient {
     await store.save(
       accessToken: response.accessToken!,
       refreshToken: response.refreshToken ?? refreshToken,
+      accessTokenExpiresAt: response.accessTokenExpirationDateTime,
     );
     return response.accessToken;
   }
 
   Future<OidcUserProfile> profile() async {
-    final accessToken = await store.readAccessToken();
+    var accessToken = await store.readAccessToken();
     if (accessToken == null) throw StateError('Sign in is required');
     final endpoint = Uri.parse(
       '${environment.keycloakIssuer}/protocol/openid-connect/userinfo',
     );
-    final response = await _httpClient.get<Object>(
+    Future<Response<Object>> request(String token) => _httpClient.get<Object>(
       endpoint.toString(),
       options: Options(
-        headers: {'Authorization': 'Bearer $accessToken'},
+        headers: {'Authorization': 'Bearer $token'},
         followRedirects: false,
         sendTimeout: const Duration(seconds: 8),
         receiveTimeout: const Duration(seconds: 8),
       ),
     );
+    Response<Object> response;
+    try {
+      response = await request(accessToken);
+    } on DioException catch (error) {
+      if (error.response?.statusCode != 401) rethrow;
+      accessToken = await refresh();
+      if (accessToken == null) throw StateError('Sign in is required');
+      response = await request(accessToken);
+    }
     if (response.statusCode != 200 || response.data is! Map) {
       throw StateError('Account profile is unavailable');
     }
@@ -395,6 +443,28 @@ class PlatformApi {
             ),
           );
   final Dio dio;
+
+  Future<void> registerPushInstallation({
+    required String accessToken,
+    required String installationId,
+    required String registrationToken,
+  }) async {
+    await dio.put<Object>(
+      '/services/realtime/push/registrations/$installationId',
+      data: {'platform': 'ANDROID', 'registrationToken': registrationToken},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
+
+  Future<void> unregisterPushInstallation({
+    required String accessToken,
+    required String installationId,
+  }) async {
+    await dio.delete<Object>(
+      '/services/realtime/push/registrations/$installationId',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
 
   Future<List<OrganizationSummary>> listOrganizations({
     required String accessToken,

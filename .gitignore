@@ -44,3 +44,6 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 /android/build/
+
+# Firebase Android application configuration is supplied locally/through CI.
+/android/app/google-services.json

@@ -41,3 +41,20 @@ No profile value is presented as a scientific recommendation.
 Organization owners and administrators can invite an existing account as an
 Admin or Viewer. The recipient accepts or rejects the invitation from the
 Organization access screen without copying an invitation token.
+
+Authentication persists through app and phone restarts by refreshing the
+Keycloak offline session from platform secure storage. A transient network
+failure keeps the saved session and presents a safe retry state; only explicit
+logout clears it.
+
+Closed-app threshold notifications use an optional FCM integration. Android
+uses a local `android/app/google-services.json` file that is intentionally
+ignored by Git; it is generated/downloaded from the selected Firebase project.
+The build must explicitly enable:
+
+- `ALGAGUARD_ENABLE_FCM=true`
+
+The Firebase Android application file contains public application identifiers,
+not the server service account. The service-account private key belongs only in
+the deployment secret store. The app registers its FCM token only after
+authentication, handles token rotation, and unregisters/deletes it on logout.

@@ -14,6 +14,8 @@ import 'package:algaguard_mobile_app/src/brand_logo.dart';
 import 'package:algaguard_mobile_app/src/algae_profiles.dart';
 import 'package:algaguard_mobile_app/src/algae_profiles_screen.dart';
 import 'package:algaguard_mobile_app/src/organization_access_screen.dart';
+import 'package:algaguard_mobile_app/src/persistent_auth.dart';
+import 'package:algaguard_mobile_app/src/push_notifications.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -24,6 +26,40 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 final environmentProvider = Provider<AppEnvironment>(
   (_) => AppEnvironment.fromDefines(),
 );
+
+final tokenStoreProvider = Provider<TokenStore>(
+  (_) => const TokenStore(FlutterSecureStorage()),
+);
+
+final authSessionProvider = ChangeNotifierProvider<PersistentAuthController>((
+  ref,
+) {
+  final environment = ref.watch(environmentProvider);
+  final store = ref.watch(tokenStoreProvider);
+  final oidc = OidcClient(environment, store);
+  final controller = PersistentAuthController(
+    hasRefreshToken: () async => await store.readRefreshToken() != null,
+    accessTokenExpiry: store.readAccessTokenExpiry,
+    refresh: oidc.refresh,
+    login: oidc.login,
+    logout: oidc.logout,
+  );
+  return controller;
+});
+
+final pushNotificationProvider =
+    ChangeNotifierProvider<PushNotificationController>((ref) {
+      final environment = ref.watch(environmentProvider);
+      final store = ref.watch(tokenStoreProvider);
+      final controller = PushNotificationController(
+        enabled: environment.fcm.enabled,
+        messaging: FirebasePushMessaging(environment.fcm),
+        store: store,
+        api: PlatformApi(environment.apiBaseUrl),
+        accessToken: store.readAccessToken,
+      );
+      return controller;
+    });
 
 final realtimeControllerProvider =
     ChangeNotifierProvider<RealtimeSessionController>((ref) {
@@ -66,63 +102,166 @@ final realtimeControllerProvider =
       return controller;
     });
 
-void main() => runApp(const ProviderScope(child: AlgaGuardApp()));
+final rootNavigatorKey = GlobalKey<NavigatorState>();
+final rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
-class AlgaGuardApp extends ConsumerWidget {
-  const AlgaGuardApp({super.key});
-  @override
-  Widget build(BuildContext context, WidgetRef ref) => MaterialApp(
-    title: 'AlgaGuard',
-    theme: ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff087b72)),
-      useMaterial3: true,
-    ),
-    routes: {
-      '/': (_) => const SplashScreen(),
-      '/login': (_) => const LoginScreen(),
-      '/organizations': (_) => const OrganizationScreen(),
-      '/home': (_) => const HomeScreen(),
-      '/devices': (_) => const DevicesScreen(),
-      '/device': (_) => const DeviceDetailsScreen(),
-      '/readings': (_) => const DeviceReadingsScreen(),
-      '/profiles': (_) => AlgaeProfilesScreen(
-        apiBaseUrl: ref.read(environmentProvider).apiBaseUrl,
-      ),
-      '/organization-access': (_) => OrganizationAccessScreen(
-        apiBaseUrl: ref.read(environmentProvider).apiBaseUrl,
-      ),
-      '/ota': (_) => const OtaScreen(),
-      '/account': (_) => const AccountScreen(),
-      if (secureTransportPreflightAvailable())
-        '/secure-transport': (_) => SecureTransportPreflightScreen(
-          controller: SecureTransportPreflightController(
-            PlatformApi(ref.read(environmentProvider).apiBaseUrl),
-          ),
-        ),
-    },
-  );
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await registerFirebaseBackgroundHandler(AppEnvironment.fromDefines().fcm);
+  runApp(const ProviderScope(child: AlgaGuardApp()));
 }
 
-class SplashScreen extends StatelessWidget {
-  const SplashScreen({super.key});
+class AlgaGuardApp extends ConsumerStatefulWidget {
+  const AlgaGuardApp({super.key});
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const AlgaGuardBrandLogo(size: 180),
-          const SizedBox(height: 20),
-          FilledButton.icon(
-            icon: const Icon(Icons.eco),
-            label: const Text('Start AlgaGuard'),
-            onPressed: () =>
-                Navigator.of(context).pushReplacementNamed('/login'),
-          ),
-        ],
+  ConsumerState<AlgaGuardApp> createState() => _AlgaGuardAppState();
+}
+
+class _AlgaGuardAppState extends ConsumerState<AlgaGuardApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(() async {
+        await ref.read(authSessionProvider).resumed();
+        if (ref.read(authSessionProvider).state ==
+            PersistentAuthState.authenticated) {
+          await ref.read(pushNotificationProvider).activate();
+        }
+      }());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen(pushNotificationProvider, (_, controller) {
+      final message = controller.foregroundAlert;
+      if (message == null) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        rootScaffoldMessengerKey.currentState?.showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+        controller.clearForegroundAlert();
+      });
+    });
+    return MaterialApp(
+      navigatorKey: rootNavigatorKey,
+      scaffoldMessengerKey: rootScaffoldMessengerKey,
+      title: 'AlgaGuard',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff087b72)),
+        useMaterial3: true,
       ),
-    ),
-  );
+      routes: {
+        '/': (_) => const SplashScreen(),
+        '/login': (_) => const LoginScreen(),
+        '/organizations': (_) => const OrganizationScreen(),
+        '/home': (_) => const HomeScreen(),
+        '/devices': (_) => const DevicesScreen(),
+        '/device': (_) => const DeviceDetailsScreen(),
+        '/readings': (_) => const DeviceReadingsScreen(),
+        '/profiles': (_) => AlgaeProfilesScreen(
+          apiBaseUrl: ref.read(environmentProvider).apiBaseUrl,
+        ),
+        '/organization-access': (_) => OrganizationAccessScreen(
+          apiBaseUrl: ref.read(environmentProvider).apiBaseUrl,
+        ),
+        '/ota': (_) => const OtaScreen(),
+        '/account': (_) => const AccountScreen(),
+        if (secureTransportPreflightAvailable())
+          '/secure-transport': (_) => SecureTransportPreflightScreen(
+            controller: SecureTransportPreflightController(
+              PlatformApi(ref.read(environmentProvider).apiBaseUrl),
+            ),
+          ),
+      },
+    );
+  }
+}
+
+class SplashScreen extends ConsumerStatefulWidget {
+  const SplashScreen({super.key});
+
+  @override
+  ConsumerState<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends ConsumerState<SplashScreen> {
+  bool _navigationScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future<void>.microtask(() => ref.read(authSessionProvider).restore());
+  }
+
+  void _navigate(String route) {
+    if (_navigationScheduled) return;
+    _navigationScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      var destination = route;
+      if (route == '/organizations') {
+        unawaited(ref.read(pushNotificationProvider).activate());
+        final selected = await ref
+            .read(tokenStoreProvider)
+            .readSelectedOrganization();
+        if (selected != null) destination = '/home';
+      }
+      if (mounted) Navigator.of(context).pushReplacementNamed(destination);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(authSessionProvider).state;
+    if (state == PersistentAuthState.authenticated) {
+      _navigate('/organizations');
+    } else if (state == PersistentAuthState.signedOut) {
+      _navigate('/login');
+    }
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const AlgaGuardBrandLogo(size: 180, withWordmark: true),
+            const SizedBox(height: 20),
+            if (state == PersistentAuthState.checking)
+              const CircularProgressIndicator()
+            else if (state == PersistentAuthState.unavailable) ...[
+              const Text('Your saved session could not be refreshed yet.'),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () {
+                  _navigationScheduled = false;
+                  ref.read(authSessionProvider).restore();
+                },
+                child: const Text('Retry securely'),
+              ),
+              TextButton(
+                onPressed: () => _navigate('/login'),
+                child: const Text('Sign in again'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -140,11 +279,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       _error = null;
     });
     try {
-      final environment = ref.read(environmentProvider);
-      await OidcClient(
-        environment,
-        const TokenStore(FlutterSecureStorage()),
-      ).login();
+      await ref.read(authSessionProvider).signIn();
+      unawaited(ref.read(pushNotificationProvider).activate());
       if (mounted) Navigator.of(context).pushReplacementNamed('/organizations');
     } catch (_) {
       if (mounted) {
@@ -1820,7 +1956,8 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
   Future<void> _signOut() async {
     setState(() => _signingOut = true);
     await ref.read(realtimeControllerProvider).stop();
-    await OidcClient(ref.read(environmentProvider), _store).logout();
+    await ref.read(pushNotificationProvider).deactivate();
+    await ref.read(authSessionProvider).signOut();
     if (mounted) {
       Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
     }

@@ -5,6 +5,12 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Local/release FCM builds supply this ignored Firebase configuration file.
+// CI intentionally builds the default-disabled FCM variant without it.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.algaguard.algaguard_mobile_app"
     compileSdk = flutter.compileSdkVersion
