@@ -210,6 +210,7 @@ class DeviceSummary {
     required this.deviceId,
     required this.lifecycle,
     required this.ownershipVersion,
+    this.displayName,
   });
 
   factory DeviceSummary.fromJson(Map<String, dynamic> value) {
@@ -217,6 +218,7 @@ class DeviceSummary {
     final deviceId = value['deviceId'];
     final lifecycle = value['lifecycle'];
     final ownershipVersion = value['ownershipVersion'];
+    final displayName = value['displayName'];
     if (deviceUuid is! String ||
         !RegExp(
           r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
@@ -227,6 +229,10 @@ class DeviceSummary {
         lifecycle is! String ||
         ownershipVersion is! String ||
         !RegExp(r'^[1-9][0-9]{0,18}$').hasMatch(ownershipVersion) ||
+        (displayName != null &&
+            (displayName is! String ||
+                displayName.trim().isEmpty ||
+                displayName.length > 64)) ||
         !const {
           'UNCLAIMED',
           'CLAIMED',
@@ -242,6 +248,7 @@ class DeviceSummary {
       deviceId: deviceId,
       lifecycle: lifecycle,
       ownershipVersion: ownershipVersion,
+      displayName: displayName as String?,
     );
   }
 
@@ -249,6 +256,39 @@ class DeviceSummary {
   final String deviceId;
   final String lifecycle;
   final String ownershipVersion;
+  final String? displayName;
+
+  String get visibleName => displayName ?? deviceId;
+}
+
+class ProfileSummary {
+  const ProfileSummary({
+    required this.profileId,
+    required this.name,
+    required this.version,
+  });
+
+  factory ProfileSummary.fromJson(Map<String, dynamic> value) {
+    final profileId = value['profileId'];
+    final name = value['name'];
+    final current = value['current'];
+    if (profileId is! String ||
+        name is! String ||
+        name.trim().isEmpty ||
+        current is! Map ||
+        current['version'] is! int) {
+      throw const FormatException('Invalid profile response');
+    }
+    return ProfileSummary(
+      profileId: profileId,
+      name: name.trim(),
+      version: current['version'] as int,
+    );
+  }
+
+  final String profileId;
+  final String name;
+  final int version;
 }
 
 class PreparedPhysicalOnboarding {
@@ -373,6 +413,126 @@ class PlatformApi {
               DeviceSummary.fromJson(Map<String, dynamic>.from(item as Map)),
         )
         .toList(growable: false);
+  }
+
+  Future<DeviceSummary> updateDeviceName({
+    required String accessToken,
+    required String deviceUuid,
+    required String displayName,
+  }) async {
+    final normalized = displayName.trim();
+    if (normalized.isEmpty || normalized.length > 64) {
+      throw const FormatException('Invalid device name');
+    }
+    final response = await dio.patch<Object>(
+      '/services/device/devices/$deviceUuid',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {'displayName': normalized},
+    );
+    if (response.statusCode != 200 || response.data is! Map) {
+      throw StateError('Device name was not saved');
+    }
+    return DeviceSummary.fromJson(
+      Map<String, dynamic>.from(response.data! as Map),
+    );
+  }
+
+  Future<List<ProfileSummary>> listProfiles({
+    required String accessToken,
+    required String organizationId,
+  }) async {
+    final response = await dio.get<Object>(
+      '/services/profile/profiles',
+      queryParameters: {'organizationId': organizationId},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    if (response.statusCode != 200 || response.data is! Map) {
+      throw StateError('Profiles are unavailable');
+    }
+    final items = (response.data! as Map)['items'];
+    if (items is! List || items.length > 100) {
+      throw const FormatException('Invalid profiles response');
+    }
+    return items
+        .map(
+          (item) =>
+              ProfileSummary.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList(growable: false);
+  }
+
+  Future<ProfileSummary> createAndAssignDeviceProfile({
+    required String accessToken,
+    required String organizationId,
+    required String deviceId,
+    required String profileName,
+  }) async {
+    final normalized = profileName.trim();
+    if (normalized.isEmpty || normalized.length > 120) {
+      throw const FormatException('Invalid profile name');
+    }
+    final profiles = await listProfiles(
+      accessToken: accessToken,
+      organizationId: organizationId,
+    );
+    final matches = profiles
+        .where(
+          (profile) => profile.name.toLowerCase() == normalized.toLowerCase(),
+        )
+        .toList(growable: false);
+    final ProfileSummary profile;
+    if (matches.length == 1) {
+      profile = matches.single;
+    } else if (matches.isEmpty) {
+      final created = await dio.post<Object>(
+        '/services/profile/profiles',
+        options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+        data: {
+          'organizationId': organizationId,
+          'name': normalized,
+          'configuration': {
+            'status': 'DRAFT',
+            'thresholds': <String, Object>{},
+          },
+        },
+      );
+      if (created.statusCode != 201 || created.data is! Map) {
+        throw StateError('Profile was not created');
+      }
+      profile = ProfileSummary.fromJson(
+        Map<String, dynamic>.from(created.data! as Map),
+      );
+    } else {
+      throw StateError('Profile name is already used more than once');
+    }
+
+    final assigned = await dio.put<Object>(
+      '/services/profile/devices/$deviceId/profile-assignment',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {
+        'organizationId': organizationId,
+        'profileId': profile.profileId,
+        'version': profile.version,
+      },
+    );
+    if (assigned.statusCode != 200) {
+      throw StateError('Profile was not assigned');
+    }
+    return profile;
+  }
+
+  Future<void> removeDevice({
+    required String accessToken,
+    required String deviceUuid,
+  }) async {
+    final response = await dio.delete<Object>(
+      '/services/device/devices/$deviceUuid',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: const {'confirmation': 'REMOVE'},
+    );
+    if (response.statusCode != 204) {
+      throw StateError('Device was not removed');
+    }
   }
 
   Future<DeviceCloudReadiness> waitForDeviceCloudReadiness({

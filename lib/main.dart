@@ -553,7 +553,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
         if (_loading) const LinearProgressIndicator(),
         for (final device in _devices)
           ListTile(
-            title: Text(device.deviceId),
+            title: Text(device.visibleName),
             subtitle: Text('${device.lifecycle} · authorized HTTPS state'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(
@@ -976,6 +976,7 @@ class _BleProvisioningScreenState extends ConsumerState<BleProvisioningScreen> {
   String _state = 'Ready to discover the matching AlgaGuard BLE service.';
   bool _working = false;
   bool _freshAttemptRequested = false;
+  bool _cloudReady = false;
   Future<void> _provision() async {
     setState(() {
       _working = true;
@@ -998,6 +999,7 @@ class _BleProvisioningScreenState extends ConsumerState<BleProvisioningScreen> {
       final readiness = await _waitForCloudReadiness();
       if (mounted) {
         setState(() {
+          _cloudReady = readiness == DeviceCloudReadiness.ready;
           _state = switch (readiness) {
             DeviceCloudReadiness.ready => 'Device connected to cloud.',
             DeviceCloudReadiness.timedOut =>
@@ -1131,6 +1133,14 @@ class _BleProvisioningScreenState extends ConsumerState<BleProvisioningScreen> {
           onPressed: _working ? null : _provision,
           child: Text(_working ? 'Provisioning…' : 'Send credentials over BLE'),
         ),
+        if (_cloudReady) ...[
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            onPressed: _working ? null : _openDeviceSetup,
+            icon: const Icon(Icons.tune),
+            label: const Text('Name device and create profile'),
+          ),
+        ],
         const SizedBox(height: 8),
         OutlinedButton(
           onPressed: _working ? null : _startOverWithFreshQr,
@@ -1147,6 +1157,150 @@ class _BleProvisioningScreenState extends ConsumerState<BleProvisioningScreen> {
       ],
     ),
   );
+
+  Future<void> _openDeviceSetup() async {
+    final store = const TokenStore(FlutterSecureStorage());
+    final token = await store.readAccessToken();
+    final organizationId = await store.readSelectedOrganization();
+    if (token == null || organizationId == null || !mounted) return;
+    try {
+      final devices = await PlatformApi(
+        ref.read(environmentProvider).apiBaseUrl,
+      ).listDevices(accessToken: token, organizationId: organizationId);
+      final device = devices.singleWhere(
+        (candidate) => candidate.deviceId == widget.claim.deviceId,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => DeviceSetupScreen(device: device),
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        setState(() => _state = 'Device setup is temporarily unavailable.');
+      }
+    }
+  }
+}
+
+class DeviceSetupScreen extends ConsumerStatefulWidget {
+  const DeviceSetupScreen({super.key, required this.device});
+
+  final DeviceSummary device;
+
+  @override
+  ConsumerState<DeviceSetupScreen> createState() => _DeviceSetupScreenState();
+}
+
+class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
+  final _store = const TokenStore(FlutterSecureStorage());
+  late final TextEditingController _deviceName;
+  late final TextEditingController _profileName;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _deviceName = TextEditingController(text: widget.device.displayName ?? '');
+    _profileName = TextEditingController(
+      text: '${widget.device.displayName ?? widget.device.deviceId} profile',
+    );
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    final deviceName = _deviceName.text.trim();
+    final profileName = _profileName.text.trim();
+    if (deviceName.isEmpty || profileName.isEmpty) {
+      setState(() => _error = 'Enter a device name and profile name.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final token = await _store.readAccessToken();
+      final organizationId = await _store.readSelectedOrganization();
+      if (token == null || organizationId == null) {
+        throw StateError('Authentication required');
+      }
+      final api = PlatformApi(ref.read(environmentProvider).apiBaseUrl);
+      await api.updateDeviceName(
+        accessToken: token,
+        deviceUuid: widget.device.deviceUuid,
+        displayName: deviceName,
+      );
+      await api.createAndAssignDeviceProfile(
+        accessToken: token,
+        organizationId: organizationId,
+        deviceId: widget.device.deviceId,
+        profileName: profileName,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Device name and profile saved.')),
+      );
+      Navigator.of(context).pushNamedAndRemoveUntil('/devices', (_) => false);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error =
+              'Device setup was not saved. Check your owner/admin access and retry.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _deviceName.dispose();
+    _profileName.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Set up device')),
+    body: ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        TextField(
+          key: const Key('device-name-field'),
+          controller: _deviceName,
+          maxLength: 64,
+          decoration: const InputDecoration(labelText: 'Device name'),
+        ),
+        TextField(
+          key: const Key('profile-name-field'),
+          controller: _profileName,
+          maxLength: 120,
+          decoration: const InputDecoration(labelText: 'Profile name'),
+        ),
+        const Text(
+          'The new profile starts as a draft with no scientific thresholds. Configure thresholds before using alerts.',
+        ),
+        const SizedBox(height: 12),
+        FilledButton(
+          key: const Key('save-device-setup'),
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Saving…' : 'Save device setup'),
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 class DeviceDetailsScreen extends ConsumerStatefulWidget {
@@ -1160,6 +1314,7 @@ class DeviceDetailsScreen extends ConsumerStatefulWidget {
 class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
   final _store = const TokenStore(FlutterSecureStorage());
   DemoTelemetryReading? _reading;
+  DeviceSummary? _device;
   bool _loading = true;
   String? _error;
   int _observedEventRevision = -1;
@@ -1194,6 +1349,7 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
       }
       final api = PlatformApi(ref.read(environmentProvider).apiBaseUrl);
       final device = await _resolveDevice(api, token, organizationId);
+      if (mounted) setState(() => _device = device);
       final reading = await api.latestDemoTelemetry(
         accessToken: token,
         deviceUuid: device.deviceUuid,
@@ -1226,7 +1382,7 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
     }
     final reading = _reading;
     return Scaffold(
-      appBar: AppBar(title: const Text('Demo device telemetry')),
+      appBar: AppBar(title: Text(_device?.visibleName ?? 'Device telemetry')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -1252,6 +1408,23 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
               subtitle: Text('HTTPS recovery and one-time WSS tickets'),
             ),
           ),
+          if (_device != null)
+            OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => DeviceSetupScreen(device: _device!),
+                ),
+              ),
+              icon: const Icon(Icons.edit),
+              label: const Text('Edit device name and profile'),
+            ),
+          if (_device != null)
+            TextButton.icon(
+              key: const Key('remove-device'),
+              onPressed: _removeDevice,
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('Remove device'),
+            ),
           FilledButton.icon(
             onPressed: () async {
               final confirmed = await showDialog<bool>(
@@ -1289,6 +1462,50 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _removeDevice() async {
+    final device = _device;
+    if (device == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove device?'),
+        content: const Text(
+          'This revokes cloud access and removes the device from this organization list. Audit history is preserved.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final token = await _store.readAccessToken();
+      if (token == null) throw StateError('Authentication required');
+      await PlatformApi(
+        ref.read(environmentProvider).apiBaseUrl,
+      ).removeDevice(accessToken: token, deviceUuid: device.deviceUuid);
+      if (!mounted) return;
+      Navigator.of(context).pushNamedAndRemoveUntil('/devices', (_) => false);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Device was not removed. Owner/admin access is required.',
+            ),
+          ),
+        );
+      }
+    }
   }
 }
 
