@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:algaguard_mobile_app/src/ble_provisioning_wire.dart';
@@ -309,5 +310,12 @@ void main() {
       const FormatException('QR_EXCHANGE_UNAVAILABLE').toString(),
       isNot(contains('sessionToken')),
     );
+  });
+
+  test('11 Devices owns the only visible secure QR onboarding entry point', () {
+    final source = File('lib/main.dart').readAsStringSync();
+    expect(source, isNot(contains("'/scan': (_) => const ScanQrScreen()")));
+    expect(source, isNot(contains("'Add device (scan QR)'")));
+    expect(source, contains("label: const Text('Scan device QR')"));
   });
 }

@@ -80,7 +80,6 @@ class AlgaGuardApp extends ConsumerWidget {
       '/organizations': (_) => const OrganizationScreen(),
       '/home': (_) => const HomeScreen(),
       '/devices': (_) => const DevicesScreen(),
-      '/scan': (_) => const ScanQrScreen(),
       '/device': (_) => const DeviceDetailsScreen(),
       '/ota': (_) => const OtaScreen(),
       '/account': (_) => const AccountScreen(),
@@ -371,12 +370,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       'Manage devices in the selected organization.',
       Icons.memory,
       '/devices',
-    ),
-    (
-      'Add device (scan QR)',
-      'Scan the short-lived QR shown on the AlgaGuard OLED to prepare secure setup.',
-      Icons.qr_code_scanner,
-      '/scan',
     ),
     (
       'Device readings',
@@ -698,7 +691,8 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
     QrOnboardingScanState.unsupported => 'Unsupported invitation',
     QrOnboardingScanState.preparing => 'Preparing secure onboarding',
     QrOnboardingScanState.ready => 'Connect to AlgaGuard-Setup',
-    QrOnboardingScanState.failed => 'Secure onboarding was not prepared',
+    QrOnboardingScanState.failed =>
+      'Secure onboarding is temporarily unavailable. Scan a fresh QR and try again.',
   };
 
   Future<void> _accept(String raw) async {
