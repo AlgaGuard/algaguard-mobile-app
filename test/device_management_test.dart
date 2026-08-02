@@ -54,7 +54,8 @@ void main() {
                 );
                 return;
               }
-              if (options.method == 'POST') {
+              if (options.method == 'POST' &&
+                  options.path == '/services/profile/profiles') {
                 handler.resolve(
                   Response<Object>(
                     requestOptions: options,
@@ -68,12 +69,18 @@ void main() {
                 );
                 return;
               }
+              if (options.method == 'PUT') {
+                handler.resolve(
+                  Response<Object>(
+                    requestOptions: options,
+                    statusCode: 200,
+                    data: const {'id': '40000000-0000-4000-8000-000000000004'},
+                  ),
+                );
+                return;
+              }
               handler.resolve(
-                Response<Object>(
-                  requestOptions: options,
-                  statusCode: 200,
-                  data: const {'assigned': true},
-                ),
+                Response<Object>(requestOptions: options, statusCode: 202),
               );
             },
           ),
@@ -90,10 +97,25 @@ void main() {
           );
 
       expect(profile.name, 'North tank profile');
-      expect(requests.map((value) => value.method), ['GET', 'POST', 'PUT']);
+      expect(requests.map((value) => value.method), [
+        'GET',
+        'POST',
+        'PUT',
+        'POST',
+      ]);
+      expect(
+        requests[2].path,
+        '/services/profile/devices/AG-000001/profile-assignment',
+      );
       expect(
         requests.last.path,
-        '/services/profile/devices/AG-000001/profile-assignment',
+        '/services/command/devices/AG-000001/commands',
+      );
+      final command = requests.last.data as Map<String, dynamic>;
+      expect(command['commandType'], 'APPLY_PROFILE_CONFIGURATION');
+      expect(
+        (command['parameters'] as Map<String, dynamic>)['profileVersion'],
+        '1.0.0',
       );
       expect((requests[1].data as Map<String, dynamic>)['configuration'], {
         'status': 'DRAFT',

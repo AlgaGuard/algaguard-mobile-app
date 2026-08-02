@@ -12,6 +12,18 @@ import 'onboarding.dart';
 import 'demo_telemetry.dart';
 import 'qr_onboarding.dart';
 
+String _uuidV4() {
+  final random = Random.secure();
+  final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  String hex(int value) => value.toRadixString(16).padLeft(2, '0');
+  final value = bytes.map(hex).join();
+  return '${value.substring(0, 8)}-${value.substring(8, 12)}-'
+      '${value.substring(12, 16)}-${value.substring(16, 20)}-'
+      '${value.substring(20)}';
+}
+
 class TokenStore {
   const TokenStore(this.storage);
   final FlutterSecureStorage storage;
@@ -515,8 +527,38 @@ class PlatformApi {
         'version': profile.version,
       },
     );
-    if (assigned.statusCode != 200) {
+    if (assigned.statusCode != 200 || assigned.data is! Map) {
       throw StateError('Profile was not assigned');
+    }
+    final assignment = Map<String, dynamic>.from(assigned.data! as Map);
+    final configurationId = assignment['id'];
+    if (configurationId is! String ||
+        !RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        ).hasMatch(configurationId)) {
+      throw const FormatException('Invalid profile assignment response');
+    }
+    final commandId = _uuidV4();
+    final command = await dio.post<Object>(
+      '/services/command/devices/$deviceId/commands',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {
+        'commandId': commandId,
+        'commandType': 'APPLY_PROFILE_CONFIGURATION',
+        'expiresAt': DateTime.now()
+            .toUtc()
+            .add(const Duration(minutes: 10))
+            .toIso8601String(),
+        'parameters': {
+          'configurationId': configurationId,
+          'profileId': profile.profileId,
+          'profileVersion': '${profile.version}.0.0',
+        },
+      },
+    );
+    if (command.statusCode != 202) {
+      throw StateError('Device profile command was not queued');
     }
     return profile;
   }
