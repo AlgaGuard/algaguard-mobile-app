@@ -20,7 +20,13 @@ enum QrOnboardingScanState {
   failed,
 }
 
-enum QrOnboardingExchangeFailure { expired, unavailable }
+enum QrOnboardingExchangeFailure {
+  expired,
+  replayed,
+  deviceNotEligible,
+  authorization,
+  unavailable,
+}
 
 class QrOnboardingExchangeException implements Exception {
   const QrOnboardingExchangeException(this.failure);

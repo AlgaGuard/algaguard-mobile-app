@@ -11,6 +11,7 @@ import 'environment.dart';
 import 'onboarding.dart';
 import 'demo_telemetry.dart';
 import 'qr_onboarding.dart';
+import 'algae_profiles.dart';
 
 String _uuidV4() {
   final random = Random.secure();
@@ -278,6 +279,7 @@ class ProfileSummary {
     required this.profileId,
     required this.name,
     required this.version,
+    required this.configuration,
   });
 
   factory ProfileSummary.fromJson(Map<String, dynamic> value) {
@@ -291,16 +293,83 @@ class ProfileSummary {
         current['version'] is! int) {
       throw const FormatException('Invalid profile response');
     }
+    AlgaeProfileConfiguration? configuration;
+    final rawConfiguration = current['configuration'];
+    if (rawConfiguration is Map && rawConfiguration['parameters'] is Map) {
+      configuration = AlgaeProfileConfiguration.fromJson(
+        Map<String, dynamic>.from(rawConfiguration),
+      );
+    }
     return ProfileSummary(
       profileId: profileId,
       name: name.trim(),
       version: current['version'] as int,
+      configuration: configuration,
     );
   }
 
   final String profileId;
   final String name;
   final int version;
+  final AlgaeProfileConfiguration? configuration;
+}
+
+class OrganizationInvitationSummary {
+  const OrganizationInvitationSummary({
+    required this.id,
+    required this.organizationName,
+    required this.role,
+    required this.expiresAt,
+  });
+
+  factory OrganizationInvitationSummary.fromJson(Map<String, dynamic> value) {
+    final id = value['id'];
+    final organizationName = value['organizationName'];
+    final role = value['role'];
+    final expiresAt = DateTime.tryParse(
+      value['expiresAt'] as String? ?? '',
+    )?.toUtc();
+    if (id is! String ||
+        organizationName is! String ||
+        organizationName.trim().isEmpty ||
+        !const {'ADMIN', 'VIEWER'}.contains(role) ||
+        expiresAt == null) {
+      throw const FormatException('Invalid organization invitation');
+    }
+    return OrganizationInvitationSummary(
+      id: id,
+      organizationName: organizationName.trim(),
+      role: role as String,
+      expiresAt: expiresAt,
+    );
+  }
+
+  final String id;
+  final String organizationName;
+  final String role;
+  final DateTime expiresAt;
+}
+
+class DeviceProfileAssignment {
+  const DeviceProfileAssignment({
+    required this.profileId,
+    required this.profileVersion,
+  });
+
+  factory DeviceProfileAssignment.fromJson(Map<String, dynamic> value) {
+    final profileId = value['profileId'];
+    final profileVersion = value['profileVersion'];
+    if (profileId is! String || profileVersion is! int) {
+      throw const FormatException('Invalid profile assignment');
+    }
+    return DeviceProfileAssignment(
+      profileId: profileId,
+      profileVersion: profileVersion,
+    );
+  }
+
+  final String profileId;
+  final int profileVersion;
 }
 
 class PreparedPhysicalOnboarding {
@@ -473,6 +542,180 @@ class PlatformApi {
         .toList(growable: false);
   }
 
+  Future<void> inviteOrganizationMember({
+    required String accessToken,
+    required String organizationId,
+    required String email,
+    required String role,
+  }) async {
+    final normalized = email.trim().toLowerCase();
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(normalized) ||
+        !const {'ADMIN', 'VIEWER'}.contains(role)) {
+      throw const FormatException('Invalid invitation');
+    }
+    final response = await dio.post<Object>(
+      '/services/access/organizations/$organizationId/invitations',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {'email': normalized, 'role': role},
+    );
+    if (response.statusCode != 201) {
+      throw StateError('Invitation was not created');
+    }
+  }
+
+  Future<List<OrganizationInvitationSummary>> listIncomingInvitations({
+    required String accessToken,
+  }) async {
+    final response = await dio.get<Object>(
+      '/services/access/invitations',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    if (response.statusCode != 200 || response.data is! Map) {
+      throw StateError('Invitations are unavailable');
+    }
+    final items = (response.data! as Map)['items'];
+    if (items is! List || items.length > 100) {
+      throw const FormatException('Invalid invitations response');
+    }
+    return items
+        .map(
+          (item) => OrganizationInvitationSummary.fromJson(
+            Map<String, dynamic>.from(item as Map),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> respondToInvitation({
+    required String accessToken,
+    required String invitationId,
+    required bool accept,
+  }) async {
+    final response = await dio.post<Object>(
+      '/services/access/invitations/$invitationId/${accept ? 'accept' : 'reject'}',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    if ((accept && response.statusCode != 200) ||
+        (!accept && response.statusCode != 204)) {
+      throw StateError('Invitation response was not saved');
+    }
+  }
+
+  Future<ProfileSummary> createAlgaeProfile({
+    required String accessToken,
+    required String organizationId,
+    required String name,
+    required AlgaeProfileConfiguration configuration,
+  }) async {
+    final normalized = name.trim();
+    if (normalized.isEmpty || normalized.length > 120) {
+      throw const FormatException('Invalid algae profile name');
+    }
+    final response = await dio.post<Object>(
+      '/services/profile/profiles',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {
+        'organizationId': organizationId,
+        'name': normalized,
+        'configuration': configuration.toJson(),
+      },
+    );
+    if (response.statusCode != 201 || response.data is! Map) {
+      throw StateError('Algae profile was not created');
+    }
+    return ProfileSummary.fromJson(
+      Map<String, dynamic>.from(response.data! as Map),
+    );
+  }
+
+  Future<ProfileSummary> updateAlgaeProfile({
+    required String accessToken,
+    required ProfileSummary profile,
+    required AlgaeProfileConfiguration configuration,
+  }) async {
+    final response = await dio.post<Object>(
+      '/services/profile/profiles/${profile.profileId}/versions',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: configuration.toJson(),
+    );
+    if (response.statusCode != 201 || response.data is! Map) {
+      throw StateError('Algae profile was not updated');
+    }
+    return ProfileSummary(
+      profileId: profile.profileId,
+      name: profile.name,
+      version: profile.version + 1,
+      configuration: configuration,
+    );
+  }
+
+  Future<DeviceProfileAssignment?> activeDeviceProfile({
+    required String accessToken,
+    required String deviceId,
+  }) async {
+    try {
+      final response = await dio.get<Object>(
+        '/services/profile/devices/$deviceId/profile-assignment',
+        options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      );
+      if (response.statusCode == 404) return null;
+      if (response.statusCode != 200 || response.data is! Map) {
+        throw StateError('Profile assignment is unavailable');
+      }
+      return DeviceProfileAssignment.fromJson(
+        Map<String, dynamic>.from(response.data! as Map),
+      );
+    } on DioException catch (failure) {
+      if (failure.response?.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<void> assignDeviceProfile({
+    required String accessToken,
+    required String organizationId,
+    required String deviceId,
+    required ProfileSummary profile,
+  }) async {
+    final response = await dio.put<Object>(
+      '/services/profile/devices/$deviceId/profile-assignment',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {
+        'organizationId': organizationId,
+        'profileId': profile.profileId,
+        'version': profile.version,
+      },
+    );
+    if (response.statusCode != 200 || response.data is! Map) {
+      throw StateError('Profile was not assigned');
+    }
+    final assignment = Map<String, dynamic>.from(response.data! as Map);
+    final configurationId = assignment['id'];
+    if (configurationId is! String) {
+      throw const FormatException('Invalid profile assignment response');
+    }
+    final command = await dio.post<Object>(
+      '/services/command/devices/$deviceId/commands',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {
+        'commandId': _uuidV4(),
+        'commandType': 'APPLY_PROFILE_CONFIGURATION',
+        'expiresAt': DateTime.now()
+            .toUtc()
+            .add(const Duration(minutes: 10))
+            .toIso8601String(),
+        'parameters': {
+          'configurationId': configurationId,
+          'profileId': profile.profileId,
+          'profileVersion': '${profile.version}.0.0',
+        },
+      },
+    );
+    if (command.statusCode != 202) {
+      throw StateError('Profile activation command was not queued');
+    }
+  }
+
   Future<ProfileSummary> createAndAssignDeviceProfile({
     required String accessToken,
     required String organizationId,
@@ -640,7 +883,12 @@ class PlatformApi {
       throw const FormatException('QR_EXCHANGE_MODE_INVALID');
     }
     if (device != null &&
-        (device.lifecycle != 'CLAIMED' ||
+        (!const {
+              'CLAIMED',
+              'PROVISIONED',
+              'ACTIVE',
+              'INACTIVE',
+            }.contains(device.lifecycle) ||
             device.deviceId != invitation.deviceId)) {
       throw const FormatException('QR_DEVICE_MISMATCH');
     }
@@ -670,9 +918,18 @@ class PlatformApi {
               },
       );
     } on DioException catch (failure) {
+      final data = failure.response?.data;
+      final code = data is Map ? data['code'] : null;
+      final status = failure.response?.statusCode;
       throw QrOnboardingExchangeException(
-        failure.response?.statusCode == 410
+        status == 410 || code == 'QR_INVITATION_EXPIRED'
             ? QrOnboardingExchangeFailure.expired
+            : code == 'QR_INVITATION_REPLAYED'
+            ? QrOnboardingExchangeFailure.replayed
+            : code == 'QR_ONBOARDING_NOT_ALLOWED'
+            ? QrOnboardingExchangeFailure.deviceNotEligible
+            : status == 401 || status == 403
+            ? QrOnboardingExchangeFailure.authorization
             : QrOnboardingExchangeFailure.unavailable,
       );
     }

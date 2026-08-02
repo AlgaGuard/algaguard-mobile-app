@@ -11,6 +11,9 @@ import 'package:algaguard_mobile_app/src/platform_clients.dart';
 import 'package:algaguard_mobile_app/src/qr_onboarding.dart';
 import 'package:algaguard_mobile_app/src/ble_provisioning_wire.dart';
 import 'package:algaguard_mobile_app/src/brand_logo.dart';
+import 'package:algaguard_mobile_app/src/algae_profiles.dart';
+import 'package:algaguard_mobile_app/src/algae_profiles_screen.dart';
+import 'package:algaguard_mobile_app/src/organization_access_screen.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -81,6 +84,13 @@ class AlgaGuardApp extends ConsumerWidget {
       '/home': (_) => const HomeScreen(),
       '/devices': (_) => const DevicesScreen(),
       '/device': (_) => const DeviceDetailsScreen(),
+      '/readings': (_) => const DeviceReadingsScreen(),
+      '/profiles': (_) => AlgaeProfilesScreen(
+        apiBaseUrl: ref.read(environmentProvider).apiBaseUrl,
+      ),
+      '/organization-access': (_) => OrganizationAccessScreen(
+        apiBaseUrl: ref.read(environmentProvider).apiBaseUrl,
+      ),
       '/ota': (_) => const OtaScreen(),
       '/account': (_) => const AccountScreen(),
       if (secureTransportPreflightAvailable())
@@ -375,7 +385,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       'Device readings',
       'View authenticated realtime and latest device readings.',
       Icons.show_chart,
-      '/device',
+      '/readings',
+    ),
+    (
+      'Algae Profiles',
+      'Create algae types and configure all six sensor thresholds.',
+      Icons.eco,
+      '/profiles',
+    ),
+    (
+      'Organization access',
+      'Invite users and accept or reject incoming invitations.',
+      Icons.group_add,
+      '/organization-access',
     ),
     (
       'Development OTA status',
@@ -678,6 +700,7 @@ class QrOnboardingScanScreen extends StatefulWidget {
 
 class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
   QrOnboardingScanState _state = QrOnboardingScanState.scanning;
+  QrOnboardingExchangeFailure? _exchangeFailure;
   bool _handled = false;
   bool get _canScanAgain =>
       _state == QrOnboardingScanState.expired ||
@@ -691,8 +714,16 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
     QrOnboardingScanState.unsupported => 'Unsupported invitation',
     QrOnboardingScanState.preparing => 'Preparing secure onboarding',
     QrOnboardingScanState.ready => 'Connect to AlgaGuard-Setup',
-    QrOnboardingScanState.failed =>
-      'Secure onboarding is temporarily unavailable. Scan a fresh QR and try again.',
+    QrOnboardingScanState.failed => switch (_exchangeFailure) {
+      QrOnboardingExchangeFailure.replayed =>
+        'This setup QR was already used. Show a fresh QR on the device.',
+      QrOnboardingExchangeFailure.deviceNotEligible =>
+        'This device cannot be set up in its current state.',
+      QrOnboardingExchangeFailure.authorization =>
+        'Your account is not allowed to set up this device.',
+      _ =>
+        'Secure onboarding is temporarily unavailable. Scan a fresh QR and try again.',
+    },
   };
 
   Future<void> _accept(String raw) async {
@@ -715,9 +746,18 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
     if (mounted) setState(() => _state = QrOnboardingScanState.detected);
     try {
       if (mounted) setState(() => _state = QrOnboardingScanState.preparing);
-      final prepared = await widget.api.exchangeQrOnboarding(
+      final devices = await widget.api.listDevices(
         accessToken: widget.accessToken,
         organizationId: widget.organizationId,
+      );
+      final matches = devices
+          .where((device) => device.deviceId == invitation.deviceId)
+          .toList(growable: false);
+      if (matches.length > 1) throw StateError('Duplicate device binding');
+      final prepared = await widget.api.exchangeQrOnboarding(
+        accessToken: widget.accessToken,
+        device: matches.isEmpty ? null : matches.single,
+        organizationId: matches.isEmpty ? widget.organizationId : null,
         invitation: invitation,
       );
       if (!mounted) {
@@ -741,6 +781,7 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
     } on QrOnboardingExchangeException catch (error) {
       if (mounted) {
         setState(() {
+          _exchangeFailure = error.failure;
           _state = error.failure == QrOnboardingExchangeFailure.expired
               ? QrOnboardingScanState.expired
               : QrOnboardingScanState.failed;
@@ -760,6 +801,7 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
   void _scanFreshQr() {
     setState(() {
       _handled = false;
+      _exchangeFailure = null;
       _state = QrOnboardingScanState.scanning;
     });
   }
@@ -1234,7 +1276,6 @@ class DeviceSetupScreen extends ConsumerStatefulWidget {
 class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
   final _store = const TokenStore(FlutterSecureStorage());
   late final TextEditingController _deviceName;
-  late final TextEditingController _profileName;
   bool _saving = false;
   String? _error;
 
@@ -1242,17 +1283,13 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
   void initState() {
     super.initState();
     _deviceName = TextEditingController(text: widget.device.displayName ?? '');
-    _profileName = TextEditingController(
-      text: '${widget.device.displayName ?? widget.device.deviceId} profile',
-    );
   }
 
   Future<void> _save() async {
     if (_saving) return;
     final deviceName = _deviceName.text.trim();
-    final profileName = _profileName.text.trim();
-    if (deviceName.isEmpty || profileName.isEmpty) {
-      setState(() => _error = 'Enter a device name and profile name.');
+    if (deviceName.isEmpty) {
+      setState(() => _error = 'Enter a device name.');
       return;
     }
     setState(() {
@@ -1271,15 +1308,13 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
         deviceUuid: widget.device.deviceUuid,
         displayName: deviceName,
       );
-      await api.createAndAssignDeviceProfile(
-        accessToken: token,
-        organizationId: organizationId,
-        deviceId: widget.device.deviceId,
-        profileName: profileName,
-      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Device name and profile saved.')),
+        const SnackBar(
+          content: Text(
+            'Device name saved. Select its Algae Profile from device settings.',
+          ),
+        ),
       );
       Navigator.of(context).pushNamedAndRemoveUntil('/devices', (_) => false);
     } catch (_) {
@@ -1297,7 +1332,6 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
   @override
   void dispose() {
     _deviceName.dispose();
-    _profileName.dispose();
     super.dispose();
   }
 
@@ -1313,14 +1347,8 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
           maxLength: 64,
           decoration: const InputDecoration(labelText: 'Device name'),
         ),
-        TextField(
-          key: const Key('profile-name-field'),
-          controller: _profileName,
-          maxLength: 120,
-          decoration: const InputDecoration(labelText: 'Profile name'),
-        ),
         const Text(
-          'The new profile starts as a draft with no scientific thresholds. Configure thresholds before using alerts.',
+          'After saving, select an existing Algae Profile from the device page. Create profiles from the Algae Profiles menu.',
         ),
         const SizedBox(height: 12),
         FilledButton(
@@ -1341,6 +1369,80 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
   );
 }
 
+class DeviceReadingsScreen extends ConsumerStatefulWidget {
+  const DeviceReadingsScreen({super.key});
+
+  @override
+  ConsumerState<DeviceReadingsScreen> createState() =>
+      _DeviceReadingsScreenState();
+}
+
+class _DeviceReadingsScreenState extends ConsumerState<DeviceReadingsScreen> {
+  final _store = const TokenStore(FlutterSecureStorage());
+  List<DeviceSummary> _devices = const [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final token = await _store.readAccessToken();
+      final organizationId = await _store.readSelectedOrganization();
+      if (token == null || organizationId == null) {
+        throw StateError('Authentication required');
+      }
+      final devices = await PlatformApi(
+        ref.read(environmentProvider).apiBaseUrl,
+      ).listDevices(accessToken: token, organizationId: organizationId);
+      if (mounted) {
+        setState(
+          () => _devices = devices
+              .where(
+                (device) =>
+                    device.lifecycle != 'UNCLAIMED' &&
+                    device.lifecycle != 'REVOKED',
+              )
+              .toList(growable: false),
+        );
+      }
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Device readings are unavailable.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Live device readings')),
+    body: ListView(
+      children: [
+        if (_loading) const LinearProgressIndicator(),
+        if (_error != null) ListTile(title: Text(_error!)),
+        if (!_loading && _devices.isEmpty)
+          const ListTile(title: Text('No connected devices.')),
+        for (final device in _devices)
+          ListTile(
+            leading: const Icon(Icons.sensors),
+            title: Text(device.visibleName),
+            subtitle: const Text('Open live real-time data feed'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => DeviceDetailsScreen(device: device),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
 class DeviceDetailsScreen extends ConsumerStatefulWidget {
   const DeviceDetailsScreen({super.key, this.device});
   final DeviceSummary? device;
@@ -1353,6 +1455,11 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
   final _store = const TokenStore(FlutterSecureStorage());
   DemoTelemetryReading? _reading;
   DeviceSummary? _device;
+  List<ProfileSummary> _profiles = const [];
+  String? _selectedProfileId;
+  List<AlgaeAlert> _alerts = const [];
+  String? _lastAlertSignature;
+  bool _assigningProfile = false;
   bool _loading = true;
   String? _error;
   int _observedEventRevision = -1;
@@ -1388,16 +1495,50 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
       final api = PlatformApi(ref.read(environmentProvider).apiBaseUrl);
       final device = await _resolveDevice(api, token, organizationId);
       if (mounted) setState(() => _device = device);
+      final profiles = await api.listProfiles(
+        accessToken: token,
+        organizationId: organizationId,
+      );
+      final assignment = await api.activeDeviceProfile(
+        accessToken: token,
+        deviceId: device.deviceId,
+      );
+      final assignedMatches = assignment == null
+          ? const <ProfileSummary>[]
+          : profiles
+                .where((profile) => profile.profileId == assignment.profileId)
+                .toList(growable: false);
+      final assigned = assignedMatches.length == 1
+          ? assignedMatches.single
+          : null;
       final reading = await api.latestDemoTelemetry(
         accessToken: token,
         deviceUuid: device.deviceUuid,
       );
       if (mounted) {
+        final alerts =
+            assigned?.configuration?.evaluate(reading) ?? const <AlgaeAlert>[];
         setState(() {
           _reading = reading;
+          _profiles = profiles;
+          _selectedProfileId = assigned?.profileId;
+          _alerts = alerts;
           _error = null;
           _loading = false;
         });
+        final signature = alerts.map((alert) => alert.parameterLabel).join('|');
+        if (signature.isEmpty) {
+          _lastAlertSignature = null;
+        } else if (signature != _lastAlertSignature) {
+          _lastAlertSignature = signature;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '${alerts.length} profile threshold alert${alerts.length == 1 ? '' : 's'} detected.',
+              ),
+            ),
+          );
+        }
       }
     } catch (_) {
       if (mounted) {
@@ -1432,14 +1573,67 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
               realtimeText: realtime.state.visibleText,
               now: DateTime.now(),
             ),
-          const Card(
-            child: ListTile(
-              title: Text('Profile'),
-              subtitle: Text(
-                'ESP32-generated development values; not calibrated sensor measurements',
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Algae type / profile',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  DropdownButtonFormField<String>(
+                    key: const Key('device-algae-profile-dropdown'),
+                    initialValue: _selectedProfileId,
+                    hint: const Text('Select an Algae Profile'),
+                    items: [
+                      for (final profile in _profiles)
+                        DropdownMenuItem(
+                          value: profile.profileId,
+                          child: Text(profile.name),
+                        ),
+                    ],
+                    onChanged: _assigningProfile
+                        ? null
+                        : (value) => setState(() => _selectedProfileId = value),
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton.tonal(
+                    onPressed: _assigningProfile || _selectedProfileId == null
+                        ? null
+                        : _assignSelectedProfile,
+                    child: Text(
+                      _assigningProfile ? 'Assigning...' : 'Assign profile',
+                    ),
+                  ),
+                  if (_profiles.isEmpty)
+                    TextButton(
+                      onPressed: () =>
+                          Navigator.of(context).pushNamed('/profiles'),
+                      child: const Text('Create an Algae Profile first'),
+                    ),
+                ],
               ),
             ),
           ),
+          if (_alerts.isNotEmpty)
+            Card(
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Active threshold alerts',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    for (final alert in _alerts) Text('• ${alert.safeMessage}'),
+                  ],
+                ),
+              ),
+            ),
           const Card(
             child: ListTile(
               title: Text('Cloud / certificate'),
@@ -1454,7 +1648,7 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
                 ),
               ),
               icon: const Icon(Icons.edit),
-              label: const Text('Edit device name and profile'),
+              label: const Text('Edit device settings'),
             ),
           if (_device != null)
             TextButton.icon(
@@ -1466,6 +1660,49 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _assignSelectedProfile() async {
+    final device = _device;
+    final matches = _profiles
+        .where((value) => value.profileId == _selectedProfileId)
+        .toList(growable: false);
+    final profile = matches.length == 1 ? matches.single : null;
+    if (device == null || profile == null) return;
+    setState(() => _assigningProfile = true);
+    try {
+      final token = await _store.readAccessToken();
+      final organizationId = await _store.readSelectedOrganization();
+      if (token == null || organizationId == null) {
+        throw StateError('Authentication required');
+      }
+      await PlatformApi(
+        ref.read(environmentProvider).apiBaseUrl,
+      ).assignDeviceProfile(
+        accessToken: token,
+        organizationId: organizationId,
+        deviceId: device.deviceId,
+        profile: profile,
+      );
+      if (mounted) {
+        setState(() {
+          _alerts = _reading == null
+              ? const []
+              : profile.configuration?.evaluate(_reading!) ?? const [];
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Algae Profile assigned to device.')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profile assignment was not saved.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _assigningProfile = false);
+    }
   }
 
   Future<void> _removeDevice() async {

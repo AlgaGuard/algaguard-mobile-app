@@ -29,3 +29,15 @@ and feed the existing BLE provisioning controller. QR contents, session values,
 and Wi-Fi values are never displayed, persisted, or logged. Release builds hide
 the entry point, and the older owned-device/manual handoff path remains a
 disabled fallback.
+
+The authenticated organization experience includes Algae Profiles with
+operator-defined minimum and maximum values for temperature, pH, light,
+nitrate, phosphate, and potassium. Profiles use immutable versions and may be
+assigned from each device page; assignment also queues the existing guarded
+profile-configuration command. The device live-feed page refreshes from
+authenticated realtime events and raises deduplicated in-app threshold alerts.
+No profile value is presented as a scientific recommendation.
+
+Organization owners and administrators can invite an existing account as an
+Admin or Viewer. The recipient accepts or rejects the invitation from the
+Organization access screen without copying an invitation token.

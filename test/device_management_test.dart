@@ -149,7 +149,7 @@ void main() {
   });
 
   testWidgets(
-    'device setup asks for both names and explains draft thresholds',
+    'device setup asks for a name and directs profile selection to settings',
     (tester) async {
       await tester.pumpWidget(
         const ProviderScope(
@@ -157,9 +157,9 @@ void main() {
         ),
       );
       expect(find.byKey(const Key('device-name-field')), findsOneWidget);
-      expect(find.byKey(const Key('profile-name-field')), findsOneWidget);
+      expect(find.byKey(const Key('profile-name-field')), findsNothing);
       expect(find.byKey(const Key('save-device-setup')), findsOneWidget);
-      expect(find.textContaining('no scientific thresholds'), findsOneWidget);
+      expect(find.textContaining('Algae Profiles menu'), findsOneWidget);
     },
   );
 }
