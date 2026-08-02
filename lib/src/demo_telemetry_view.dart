@@ -23,7 +23,7 @@ class DemoTelemetryView extends StatelessWidget {
     children: [
       const Align(
         alignment: Alignment.centerLeft,
-        child: Chip(label: Text('Simulated demo data')),
+        child: Chip(label: Text('ESP32-generated development data')),
       ),
       Text(realtimeText),
       if (reading.isStale(now))

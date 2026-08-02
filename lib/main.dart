@@ -10,6 +10,7 @@ import 'package:algaguard_mobile_app/src/secure_transport_preflight.dart';
 import 'package:algaguard_mobile_app/src/platform_clients.dart';
 import 'package:algaguard_mobile_app/src/qr_onboarding.dart';
 import 'package:algaguard_mobile_app/src/ble_provisioning_wire.dart';
+import 'package:algaguard_mobile_app/src/brand_logo.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -98,10 +99,18 @@ class SplashScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
     body: Center(
-      child: FilledButton.icon(
-        icon: const Icon(Icons.eco),
-        label: const Text('Start AlgaGuard'),
-        onPressed: () => Navigator.of(context).pushReplacementNamed('/login'),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const AlgaGuardBrandLogo(size: 180),
+          const SizedBox(height: 20),
+          FilledButton.icon(
+            icon: const Icon(Icons.eco),
+            label: const Text('Start AlgaGuard'),
+            onPressed: () =>
+                Navigator.of(context).pushReplacementNamed('/login'),
+          ),
+        ],
       ),
     ),
   );
@@ -356,13 +365,37 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  static const _items = <(String, IconData, String)>[
-    ('Devices', Icons.memory, '/devices'),
-    ('Scan setup QR', Icons.qr_code_scanner, '/scan'),
-    ('Live telemetry', Icons.show_chart, '/device'),
-    ('Safe command and LED control', Icons.lightbulb_outline, '/device'),
-    ('Development OTA status', Icons.system_update, '/ota'),
-    ('Account', Icons.account_circle, '/account'),
+  static const _items = <(String, String, IconData, String)>[
+    (
+      'Devices',
+      'Manage devices in the selected organization.',
+      Icons.memory,
+      '/devices',
+    ),
+    (
+      'Add device (scan QR)',
+      'Scan the short-lived QR shown on the AlgaGuard OLED to prepare secure setup.',
+      Icons.qr_code_scanner,
+      '/scan',
+    ),
+    (
+      'Device readings',
+      'View authenticated realtime and latest device readings.',
+      Icons.show_chart,
+      '/device',
+    ),
+    (
+      'Development OTA status',
+      'View OTA readiness; updates are never started automatically.',
+      Icons.system_update,
+      '/ota',
+    ),
+    (
+      'Account',
+      'View account state and sign out.',
+      Icons.account_circle,
+      '/account',
+    ),
   ];
 
   @override
@@ -405,10 +438,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           }
           final item = _items[index - 1];
           return ListTile(
-            leading: Icon(item.$2),
+            leading: Icon(item.$3),
             title: Text(item.$1),
+            subtitle: Text(item.$2),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).pushNamed(item.$3),
+            onTap: () => Navigator.of(context).pushNamed(item.$4),
           );
         },
       ),
@@ -814,10 +848,20 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Scan setup QR')),
+    appBar: AppBar(title: const Text('Add device')),
     body: ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        const Card(
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Text(
+              'Scan the short-lived QR displayed by the AlgaGuard device. '
+              'It identifies the device invitation; it does not contain Wi-Fi credentials.',
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
         SizedBox(
           height: 260,
           child: MobileScanner(
@@ -1364,7 +1408,7 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
     } catch (_) {
       if (mounted) {
         setState(() {
-          _error = 'Simulated telemetry is unavailable.';
+          _error = 'Device readings are unavailable.';
           _loading = false;
         });
       }
@@ -1398,7 +1442,7 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
             child: ListTile(
               title: Text('Profile'),
               subtitle: Text(
-                'Development demo values — not scientifically approved',
+                'ESP32-generated development values; not calibrated sensor measurements',
               ),
             ),
           ),
@@ -1425,40 +1469,6 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
               icon: const Icon(Icons.delete_outline),
               label: const Text('Remove device'),
             ),
-          FilledButton.icon(
-            onPressed: () async {
-              final confirmed = await showDialog<bool>(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Set demo indicator state?'),
-                  content: const Text(
-                    'This is a safe LED-only command. No reset or reboot action is available.',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Cancel'),
-                    ),
-                    FilledButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Confirm'),
-                    ),
-                  ],
-                ),
-              );
-              if (confirmed == true && context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'REQUEST_STATUS / indicator command queued for authorized device.',
-                    ),
-                  ),
-                );
-              }
-            },
-            icon: const Icon(Icons.lightbulb_outline),
-            label: const Text('Safe LED control'),
-          ),
         ],
       ),
     );

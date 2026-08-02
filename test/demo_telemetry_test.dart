@@ -80,7 +80,7 @@ void main() {
         ),
       ),
     );
-    expect(find.text('Simulated demo data'), findsOneWidget);
+    expect(find.text('ESP32-generated development data'), findsOneWidget);
     for (final label in [
       'Temperature',
       'pH',
