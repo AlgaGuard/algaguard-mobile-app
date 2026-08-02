@@ -89,34 +89,37 @@ void main() {
     expect(result, DeviceCloudReadiness.timedOut);
   });
 
-  test('hidden provisional device times out without leaking identifiers', () async {
-    final dio = Dio();
-    dio.interceptors.add(
-      InterceptorsWrapper(
-        onRequest: (options, handler) => handler.resolve(
-          Response<Object>(
-            requestOptions: options,
-            statusCode: 200,
-            data: const {'items': <Object>[]},
+  test(
+    'hidden provisional device times out without leaking identifiers',
+    () async {
+      final dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) => handler.resolve(
+            Response<Object>(
+              requestOptions: options,
+              statusCode: 200,
+              data: const {'items': <Object>[]},
+            ),
           ),
         ),
-      ),
-    );
+      );
 
-    final result =
-        await PlatformApi(
-          Uri.parse('https://api.example.test'),
-          client: dio,
-        ).waitForDeviceCloudReadiness(
-          accessToken: 'access',
-          organizationId: _organizationId,
-          deviceId: 'AG-000001',
-          timeout: const Duration(milliseconds: 2),
-          pollInterval: const Duration(milliseconds: 1),
-          delay: (_) => Future<void>.delayed(const Duration(milliseconds: 2)),
-        );
+      final result =
+          await PlatformApi(
+            Uri.parse('https://api.example.test'),
+            client: dio,
+          ).waitForDeviceCloudReadiness(
+            accessToken: 'access',
+            organizationId: _organizationId,
+            deviceId: 'AG-000001',
+            timeout: const Duration(milliseconds: 2),
+            pollInterval: const Duration(milliseconds: 1),
+            delay: (_) => Future<void>.delayed(const Duration(milliseconds: 2)),
+          );
 
-    expect(result, DeviceCloudReadiness.timedOut);
-    expect(result.name, isNot(contains('AG-')));
-  });
+      expect(result, DeviceCloudReadiness.timedOut);
+      expect(result.name, isNot(contains('AG-')));
+    },
+  );
 }
