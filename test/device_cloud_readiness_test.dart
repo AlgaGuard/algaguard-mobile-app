@@ -31,7 +31,7 @@ void main() {
                 requestOptions: options,
                 statusCode: 200,
                 data: {
-                  'items': [_device(requests == 1 ? 'CLAIMED' : 'ACTIVE')],
+                  'items': requests == 1 ? <Object>[] : [_device('ACTIVE')],
                 },
               ),
             );
@@ -89,7 +89,7 @@ void main() {
     expect(result, DeviceCloudReadiness.timedOut);
   });
 
-  test('missing device is unavailable and does not leak identifiers', () async {
+  test('hidden provisional device times out without leaking identifiers', () async {
     final dio = Dio();
     dio.interceptors.add(
       InterceptorsWrapper(
@@ -111,9 +111,12 @@ void main() {
           accessToken: 'access',
           organizationId: _organizationId,
           deviceId: 'AG-000001',
+          timeout: const Duration(milliseconds: 2),
+          pollInterval: const Duration(milliseconds: 1),
+          delay: (_) => Future<void>.delayed(const Duration(milliseconds: 2)),
         );
 
-    expect(result, DeviceCloudReadiness.unavailable);
+    expect(result, DeviceCloudReadiness.timedOut);
     expect(result.name, isNot(contains('AG-')));
   });
 }

@@ -396,15 +396,22 @@ class PlatformApi {
           organizationId: organizationId,
         );
         final matches = devices.where((device) => device.deviceId == deviceId);
-        if (matches.length != 1) return DeviceCloudReadiness.unavailable;
-        if (const {
-          'PROVISIONED',
-          'ACTIVE',
-        }.contains(matches.single.lifecycle)) {
-          return DeviceCloudReadiness.ready;
-        }
-        if (matches.single.lifecycle != 'CLAIMED') {
+        // Provisioning records are intentionally hidden from ordinary device
+        // lists until credential bootstrap reaches a visible lifecycle.
+        if (matches.isEmpty) {
+          // Continue polling within the bounded readiness window.
+        } else if (matches.length != 1) {
           return DeviceCloudReadiness.unavailable;
+        } else {
+          if (const {
+            'PROVISIONED',
+            'ACTIVE',
+          }.contains(matches.single.lifecycle)) {
+            return DeviceCloudReadiness.ready;
+          }
+          if (matches.single.lifecycle != 'CLAIMED') {
+            return DeviceCloudReadiness.unavailable;
+          }
         }
       } on FormatException {
         return DeviceCloudReadiness.unavailable;
