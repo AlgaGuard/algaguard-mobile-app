@@ -170,6 +170,8 @@ class _AlgaGuardAppState extends ConsumerState<AlgaGuardApp>
         '/login': (_) => const LoginScreen(),
         '/organizations': (_) => const OrganizationScreen(),
         '/home': (_) => const HomeScreen(),
+        '/overview': (_) => const OverviewScreen(),
+        '/alerts': (_) => const AlertsScreen(),
         '/devices': (_) => const DevicesScreen(),
         '/device': (_) => const DeviceDetailsScreen(),
         '/readings': (_) => const DeviceReadingsScreen(),
@@ -512,6 +514,12 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   static const _items = <(String, String, IconData, String)>[
     (
+      'Overview',
+      'All devices across every organization you belong to.',
+      Icons.dashboard_outlined,
+      '/overview',
+    ),
+    (
       'Devices',
       'Manage devices in the selected organization.',
       Icons.memory,
@@ -536,6 +544,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       '/organization-access',
     ),
     (
+      'Alerts',
+      'Threshold breach history for the active organization.',
+      Icons.warning_amber_outlined,
+      '/alerts',
+    ),
+    (
       'Development OTA status',
       'View OTA readiness; updates are never started automatically.',
       Icons.system_update,
@@ -549,6 +563,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     ),
   ];
 
+  final _store = const TokenStore(FlutterSecureStorage());
+  List<OrganizationSummary> _organizations = const [];
+  String? _selectedOrganizationId;
+
   @override
   void initState() {
     super.initState();
@@ -557,6 +575,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ref.read(realtimeControllerProvider).start();
       }
     });
+    unawaited(_loadOrganizations());
+  }
+
+  Future<void> _loadOrganizations() async {
+    try {
+      final environment = ref.read(environmentProvider);
+      final token = await _store.readAccessToken();
+      if (token == null) return;
+      final results = await Future.wait<Object?>([
+        PlatformApi(
+          environment.apiBaseUrl,
+        ).listOrganizations(accessToken: token),
+        _store.readSelectedOrganization(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _organizations = results[0]! as List<OrganizationSummary>;
+        _selectedOrganizationId = results[1] as String?;
+      });
+    } catch (_) {
+      // The switcher is a convenience; leave it hidden if it can't load.
+    }
+  }
+
+  Future<void> _switchOrganization(String organizationId) async {
+    if (organizationId == _selectedOrganizationId) return;
+    await _store.selectOrganization(organizationId);
+    if (mounted) Navigator.of(context).pushReplacementNamed('/home');
   }
 
   @override
@@ -566,6 +612,30 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       appBar: AppBar(
         title: const Text('AlgaGuard'),
         actions: [
+          if (_organizations.length > 1)
+            PopupMenuButton<String>(
+              tooltip: 'Switch organization',
+              icon: const Icon(Icons.apartment),
+              onSelected: (value) => unawaited(_switchOrganization(value)),
+              itemBuilder: (context) => [
+                for (final organization in _organizations)
+                  PopupMenuItem(
+                    value: organization.id,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 26,
+                          child: organization.id == _selectedOrganizationId
+                              ? const Icon(Icons.check, size: 18)
+                              : null,
+                        ),
+                        Text(organization.name),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
           Padding(
             padding: EdgeInsets.all(10),
             child: Chip(label: Text(realtime.state.visibleText)),
@@ -599,6 +669,210 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
   }
+}
+
+class OverviewScreen extends ConsumerStatefulWidget {
+  const OverviewScreen({super.key});
+
+  @override
+  ConsumerState<OverviewScreen> createState() => _OverviewScreenState();
+}
+
+class _OverviewScreenState extends ConsumerState<OverviewScreen> {
+  final _store = const TokenStore(FlutterSecureStorage());
+  bool _loading = true;
+  String? _error;
+  List<(OrganizationSummary, List<DeviceSummary>)> _groups = const [];
+  Map<String, DemoTelemetryReading> _latest = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final environment = ref.read(environmentProvider);
+      final token = await _store.readAccessToken();
+      if (token == null) throw StateError('Sign in is required');
+      final api = PlatformApi(environment.apiBaseUrl);
+      final organizations = await api.listOrganizations(accessToken: token);
+      final groups = <(OrganizationSummary, List<DeviceSummary>)>[];
+      for (final organization in organizations) {
+        final devices = await api.listDevices(
+          accessToken: token,
+          organizationId: organization.id,
+        );
+        groups.add((organization, devices));
+      }
+      final deviceUuids = groups
+          .expand((group) => group.$2.map((device) => device.deviceUuid))
+          .toList(growable: false);
+      final latest = await api.latestTelemetryBatch(
+        accessToken: token,
+        deviceUuids: deviceUuids,
+      );
+      if (!mounted) return;
+      setState(() {
+        _groups = groups;
+        _latest = latest;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error = 'Devices across organizations could not be loaded.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  String _summaryFor(String deviceUuid) {
+    final reading = _latest[deviceUuid];
+    if (reading == null) return 'No data yet';
+    return '${reading.temperatureC.toStringAsFixed(1)} °C · pH ${reading.ph.toStringAsFixed(1)}';
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Overview')),
+    body: RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        children: [
+          if (_loading) const LinearProgressIndicator(),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
+          for (final group in _groups) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+              child: Text(
+                group.$1.name,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            for (final device in group.$2)
+              ListTile(
+                leading: const Icon(Icons.memory),
+                title: Text(device.visibleName),
+                subtitle: Text(_summaryFor(device.deviceUuid)),
+              ),
+            if (group.$2.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Text('No devices yet.'),
+              ),
+          ],
+          if (!_loading && _groups.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('No authorized organizations are available.'),
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
+class AlertsScreen extends ConsumerStatefulWidget {
+  const AlertsScreen({super.key});
+
+  @override
+  ConsumerState<AlertsScreen> createState() => _AlertsScreenState();
+}
+
+class _AlertsScreenState extends ConsumerState<AlertsScreen> {
+  final _store = const TokenStore(FlutterSecureStorage());
+  bool _loading = true;
+  String? _error;
+  List<AlertRecord> _alerts = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final environment = ref.read(environmentProvider);
+      final token = await _store.readAccessToken();
+      final organizationId = await _store.readSelectedOrganization();
+      if (token == null || organizationId == null) {
+        throw StateError('Authenticated organization is required');
+      }
+      final alerts = await PlatformApi(environment.apiBaseUrl)
+          .listOrganizationAlerts(
+            accessToken: token,
+            organizationId: organizationId,
+          );
+      if (mounted) setState(() => _alerts = alerts);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Alert history could not be loaded.');
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  String _occurredLabel(DateTime value) {
+    final local = value.toLocal();
+    final month = local.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '$month/$day $hour:$minute';
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Alerts')),
+    body: ListView(
+      children: [
+        if (_loading) const LinearProgressIndicator(),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        for (final alert in _alerts)
+          ListTile(
+            leading: Icon(
+              Icons.warning_amber_outlined,
+              color: Theme.of(context).colorScheme.error,
+            ),
+            title: Text('${alert.deviceId} · ${alert.parameter}'),
+            subtitle: Text(
+              alert.direction == 'HIGH'
+                  ? '${alert.value} above maximum ${alert.maximum ?? '—'}'
+                  : '${alert.value} below minimum ${alert.minimum ?? '—'}',
+            ),
+            trailing: Text(_occurredLabel(alert.occurredAt)),
+          ),
+        if (!_loading && _alerts.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('No alerts recorded yet.'),
+          ),
+      ],
+    ),
+  );
 }
 
 class DevicesScreen extends ConsumerStatefulWidget {
@@ -855,6 +1129,8 @@ class _QrOnboardingScanScreenState extends State<QrOnboardingScanScreen> {
         'This setup QR was already used. Show a fresh QR on the device.',
       QrOnboardingExchangeFailure.deviceNotEligible =>
         'This device cannot be set up in its current state.',
+      QrOnboardingExchangeFailure.pairedWithAnotherOrganization =>
+        'This device is currently paired with another organization.',
       QrOnboardingExchangeFailure.authorization =>
         'Your account is not allowed to set up this device.',
       _ =>
@@ -1596,6 +1872,7 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
   List<AlgaeAlert> _alerts = const [];
   String? _lastAlertSignature;
   bool _assigningProfile = false;
+  bool _unpairing = false;
   bool _loading = true;
   String? _error;
   int _observedEventRevision = -1;
@@ -1789,9 +2066,13 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
           if (_device != null)
             TextButton.icon(
               key: const Key('remove-device'),
-              onPressed: _removeDevice,
+              onPressed: _unpairing ? null : _removeDevice,
               icon: const Icon(Icons.delete_outline),
-              label: const Text('Remove device'),
+              label: Text(
+                _unpairing
+                    ? 'Waiting for device confirmation...'
+                    : 'Unpair device',
+              ),
             ),
         ],
       ),
@@ -1849,7 +2130,7 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Remove device?'),
         content: const Text(
-          'This revokes cloud access and removes the device from this organization list. Audit history is preserved.',
+          'The ESP32 must be online. Confirm REMOVE DEVICE on its OLED using Select. Back cancels. Cloud ownership and credentials are removed only after that physical confirmation.',
         ),
         actions: [
           TextButton(
@@ -1858,30 +2139,48 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
+            child: const Text('Request unpair'),
           ),
         ],
       ),
     );
     if (confirmed != true || !mounted) return;
+    setState(() => _unpairing = true);
     try {
       final token = await _store.readAccessToken();
       if (token == null) throw StateError('Authentication required');
-      await PlatformApi(
+      final outcome = await PlatformApi(
         ref.read(environmentProvider).apiBaseUrl,
-      ).removeDevice(accessToken: token, deviceUuid: device.deviceUuid);
+      ).requestPhysicalUnpair(accessToken: token, device: device);
       if (!mounted) return;
-      Navigator.of(context).pushNamedAndRemoveUntil('/devices', (_) => false);
+      if (outcome == PhysicalUnpairOutcome.completed) {
+        Navigator.of(context).pushNamedAndRemoveUntil('/devices', (_) => false);
+        return;
+      }
+      final message = switch (outcome) {
+        PhysicalUnpairOutcome.rejected =>
+          'Unpair was cancelled or rejected on the device.',
+        PhysicalUnpairOutcome.expired =>
+          'Physical confirmation expired. The device remains paired.',
+        PhysicalUnpairOutcome.timedOut =>
+          'No physical confirmation was received. The device remains paired.',
+        PhysicalUnpairOutcome.completed => '',
+      };
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Device was not removed. Owner/admin access is required.',
+              'Device was not unpaired. Confirm on the physical device while it is online.',
             ),
           ),
         );
       }
+    } finally {
+      if (mounted) setState(() => _unpairing = false);
     }
   }
 }

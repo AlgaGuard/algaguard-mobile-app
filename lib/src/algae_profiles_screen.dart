@@ -205,6 +205,46 @@ class _AlgaeProfilesScreenState extends State<AlgaeProfilesScreen> {
     }
   }
 
+  Future<void> _delete(ProfileSummary profile) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Algae Profile?'),
+        content: Text(
+          '${profile.name} will be removed from selection and detached from devices using it. Historical data is retained.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm-delete-algae-profile'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final authorized = await _context();
+      await authorized.$1.deleteAlgaeProfile(
+        accessToken: authorized.$2,
+        profile: profile,
+      );
+      if (mounted) {
+        setState(() {
+          _profiles = _profiles
+              .where((candidate) => candidate.profileId != profile.profileId)
+              .toList(growable: false);
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Algae profile was not deleted.');
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Algae Profiles')),
@@ -234,7 +274,18 @@ class _AlgaeProfilesScreenState extends State<AlgaeProfilesScreen> {
                     ? 'Thresholds not configured'
                     : 'Six sensor thresholds configured · version ${profile.version}',
               ),
-              trailing: const Icon(Icons.edit),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    key: Key('delete-algae-profile-${profile.profileId}'),
+                    tooltip: 'Delete profile',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => _delete(profile),
+                  ),
+                  const Icon(Icons.edit),
+                ],
+              ),
               onTap: () => _edit(profile),
             ),
           ),

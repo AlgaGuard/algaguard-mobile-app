@@ -322,6 +322,60 @@ class DeviceSummary {
   String get visibleName => displayName ?? deviceId;
 }
 
+class AlertRecord {
+  const AlertRecord({
+    required this.alertId,
+    required this.deviceId,
+    required this.parameter,
+    required this.direction,
+    required this.value,
+    required this.occurredAt,
+    this.minimum,
+    this.maximum,
+  });
+
+  factory AlertRecord.fromJson(Map<String, dynamic> value) {
+    final alertId = value['alertId'];
+    final deviceId = value['deviceId'];
+    final parameter = value['parameter'];
+    final direction = value['direction'];
+    final numericValue = value['value'];
+    final occurredAt = value['occurredAt'];
+    if (alertId is! String ||
+        deviceId is! String ||
+        parameter is! String ||
+        direction is! String ||
+        !const {'LOW', 'HIGH'}.contains(direction) ||
+        numericValue is! num ||
+        occurredAt is! String) {
+      throw const FormatException('Invalid alert response');
+    }
+    final occurred = DateTime.tryParse(occurredAt)?.toUtc();
+    if (occurred == null) throw const FormatException('Invalid alert time');
+    final minimum = value['minimum'];
+    final maximum = value['maximum'];
+    return AlertRecord(
+      alertId: alertId,
+      deviceId: deviceId,
+      parameter: parameter,
+      direction: direction,
+      value: numericValue.toDouble(),
+      occurredAt: occurred,
+      minimum: minimum is num ? minimum.toDouble() : null,
+      maximum: maximum is num ? maximum.toDouble() : null,
+    );
+  }
+
+  final String alertId;
+  final String deviceId;
+  final String parameter;
+  final String direction;
+  final double value;
+  final DateTime occurredAt;
+  final double? minimum;
+  final double? maximum;
+}
+
 class ProfileSummary {
   const ProfileSummary({
     required this.profileId,
@@ -431,6 +485,8 @@ class PreparedPhysicalOnboarding {
 }
 
 enum DeviceCloudReadiness { ready, timedOut, unavailable }
+
+enum PhysicalUnpairOutcome { completed, rejected, expired, timedOut }
 
 class PlatformApi {
   PlatformApi(Uri baseUrl, {Dio? client})
@@ -719,6 +775,20 @@ class PlatformApi {
     );
   }
 
+  Future<void> deleteAlgaeProfile({
+    required String accessToken,
+    required ProfileSummary profile,
+  }) async {
+    final response = await dio.delete<Object>(
+      '/services/profile/profiles/${profile.profileId}',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: const {'confirmation': 'DELETE'},
+    );
+    if (response.statusCode != 204) {
+      throw StateError('Algae profile was not deleted');
+    }
+  }
+
   Future<DeviceProfileAssignment?> activeDeviceProfile({
     required String accessToken,
     required String deviceId,
@@ -876,18 +946,81 @@ class PlatformApi {
     return profile;
   }
 
-  Future<void> removeDevice({
+  Future<PhysicalUnpairOutcome> requestPhysicalUnpair({
     required String accessToken,
-    required String deviceUuid,
+    required DeviceSummary device,
+    Duration timeout = const Duration(minutes: 2),
+    Duration pollInterval = const Duration(seconds: 2),
+    Future<void> Function(Duration) delay = Future<void>.delayed,
   }) async {
-    final response = await dio.delete<Object>(
-      '/services/device/devices/$deviceUuid',
-      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
-      data: const {'confirmation': 'REMOVE'},
-    );
-    if (response.statusCode != 204) {
-      throw StateError('Device was not removed');
+    if (timeout <= Duration.zero || pollInterval <= Duration.zero) {
+      throw const FormatException('Invalid physical unpair window');
     }
+    final commandId = _uuidV4();
+    final queued = await dio.post<Object>(
+      '/services/command/devices/${device.deviceId}/commands',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {
+        'commandId': commandId,
+        'commandType': 'REQUEST_PHYSICAL_UNPAIR',
+        'expiresAt': DateTime.now().toUtc().add(timeout).toIso8601String(),
+        'parameters': <String, Object>{},
+      },
+    );
+    if (queued.statusCode != 202) {
+      throw StateError('Physical confirmation request was not queued');
+    }
+    final deadline = DateTime.now().toUtc().add(timeout);
+    while (DateTime.now().toUtc().isBefore(deadline)) {
+      final response = await dio.get<Object>(
+        '/services/command/commands/$commandId',
+        options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      );
+      if (response.statusCode != 200 || response.data is! Map) {
+        throw StateError('Physical confirmation status is unavailable');
+      }
+      final value = Map<String, dynamic>.from(response.data! as Map);
+      if (value['commandId'] != commandId ||
+          value['deviceId'] != device.deviceId ||
+          value['commandType'] != 'REQUEST_PHYSICAL_UNPAIR') {
+        throw const FormatException('Invalid physical confirmation status');
+      }
+      switch (value['status']) {
+        case 'SUCCEEDED':
+          final finalized = await dio.post<Object>(
+            '/services/device/devices/${device.deviceUuid}/physical-unpair/finalize',
+            options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+            data: {
+              'commandId': commandId,
+              'ownershipVersion': device.ownershipVersion,
+              'confirmation': 'PHYSICALLY_CONFIRMED',
+            },
+          );
+          if (finalized.statusCode != 200 || finalized.data is! Map) {
+            throw StateError('Physical unpair was not finalized');
+          }
+          final result = Map<String, dynamic>.from(finalized.data! as Map);
+          if (result['state'] != 'UNPAIRED' ||
+              result['lifecycle'] != 'UNCLAIMED') {
+            throw const FormatException('Invalid physical unpair result');
+          }
+          return PhysicalUnpairOutcome.completed;
+        case 'REJECTED':
+        case 'FAILED':
+          return PhysicalUnpairOutcome.rejected;
+        case 'EXPIRED':
+          return PhysicalUnpairOutcome.expired;
+        case 'QUEUED':
+        case 'SENT':
+        case 'ACKNOWLEDGED':
+        case 'IN_PROGRESS':
+          await delay(pollInterval);
+          break;
+        default:
+          throw const FormatException('Invalid physical confirmation status');
+      }
+    }
+    return PhysicalUnpairOutcome.timedOut;
   }
 
   Future<DeviceCloudReadiness> waitForDeviceCloudReadiness({
@@ -998,6 +1131,8 @@ class PlatformApi {
             ? QrOnboardingExchangeFailure.replayed
             : code == 'QR_ONBOARDING_NOT_ALLOWED'
             ? QrOnboardingExchangeFailure.deviceNotEligible
+            : code == 'CROSS_ORGANIZATION_DENIED'
+            ? QrOnboardingExchangeFailure.pairedWithAnotherOrganization
             : status == 401 || status == 403
             ? QrOnboardingExchangeFailure.authorization
             : QrOnboardingExchangeFailure.unavailable,
@@ -1080,6 +1215,63 @@ class PlatformApi {
     return DemoTelemetryReading.fromLatestResponse(
       Map<String, dynamic>.from(response.data! as Map),
     );
+  }
+
+  /// Latest reading per device UUID, omitting devices with no telemetry yet
+  /// or an unparsable sample rather than failing the whole batch.
+  Future<Map<String, DemoTelemetryReading>> latestTelemetryBatch({
+    required String accessToken,
+    required List<String> deviceUuids,
+  }) async {
+    if (deviceUuids.isEmpty) return const {};
+    final response = await dio.post<Object>(
+      '/services/telemetry/devices/latest-batch',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+      data: {'deviceUuids': deviceUuids},
+    );
+    if (response.statusCode != 200 || response.data is! Map) {
+      throw StateError('Telemetry is unavailable');
+    }
+    final items = (response.data! as Map)['items'];
+    if (items is! List) {
+      throw const FormatException('Invalid telemetry batch response');
+    }
+    final readings = <String, DemoTelemetryReading>{};
+    for (final item in items) {
+      if (item is! Map) continue;
+      final map = Map<String, dynamic>.from(item);
+      final deviceUuid = map['deviceUuid'];
+      if (deviceUuid is! String) continue;
+      try {
+        readings[deviceUuid] = DemoTelemetryReading.fromLatestResponse(map);
+      } on FormatException {
+        // No reading yet, or an unparsable/non-demo sample; omit it.
+      }
+    }
+    return readings;
+  }
+
+  Future<List<AlertRecord>> listOrganizationAlerts({
+    required String accessToken,
+    required String organizationId,
+  }) async {
+    final response = await dio.get<Object>(
+      '/services/realtime/organizations/$organizationId/alerts',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    if (response.statusCode != 200 || response.data is! Map) {
+      throw StateError('Alerts are unavailable');
+    }
+    final items = (response.data! as Map)['items'];
+    if (items is! List || items.length > 500) {
+      throw const FormatException('Invalid alerts response');
+    }
+    return items
+        .map(
+          (item) =>
+              AlertRecord.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList(growable: false);
   }
 
   /// Development-only owner-authorized recovery. The returned session remains

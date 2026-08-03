@@ -24,6 +24,7 @@ enum QrOnboardingExchangeFailure {
   expired,
   replayed,
   deviceNotEligible,
+  pairedWithAnotherOrganization,
   authorization,
   unavailable,
 }

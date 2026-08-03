@@ -124,29 +124,71 @@ void main() {
     },
   );
 
-  test('remove device sends only the explicit safe confirmation', () async {
-    RequestOptions? captured;
-    final dio = Dio()
-      ..interceptors.add(
-        InterceptorsWrapper(
-          onRequest: (options, handler) {
-            captured = options;
-            handler.resolve(
-              Response<Object>(requestOptions: options, statusCode: 204),
-            );
-          },
-        ),
+  test(
+    'unpair requires device success before final ownership removal',
+    () async {
+      final captured = <RequestOptions>[];
+      final dio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              captured.add(options);
+              if (options.method == 'GET') {
+                final commandId = options.path.split('/').last;
+                handler.resolve(
+                  Response<Object>(
+                    requestOptions: options,
+                    statusCode: 200,
+                    data: {
+                      'commandId': commandId,
+                      'deviceId': device.deviceId,
+                      'commandType': 'REQUEST_PHYSICAL_UNPAIR',
+                      'status': 'SUCCEEDED',
+                    },
+                  ),
+                );
+                return;
+              }
+              handler.resolve(
+                Response<Object>(
+                  requestOptions: options,
+                  statusCode: options.path.endsWith('/physical-unpair/finalize')
+                      ? 200
+                      : 202,
+                  data: options.path.endsWith('/physical-unpair/finalize')
+                      ? const {'state': 'UNPAIRED', 'lifecycle': 'UNCLAIMED'}
+                      : null,
+                ),
+              );
+            },
+          ),
+        );
+      final outcome =
+          await PlatformApi(
+            Uri.parse('https://safe.example/v1'),
+            client: dio,
+          ).requestPhysicalUnpair(
+            accessToken: 'redacted-access-token',
+            device: device,
+            delay: (_) async {},
+          );
+      expect(outcome, PhysicalUnpairOutcome.completed);
+      expect(captured.map((request) => request.method), [
+        'POST',
+        'GET',
+        'POST',
+      ]);
+      expect(
+        (captured.first.data as Map)['commandType'],
+        'REQUEST_PHYSICAL_UNPAIR',
       );
-    await PlatformApi(
-      Uri.parse('https://safe.example/v1'),
-      client: dio,
-    ).removeDevice(
-      accessToken: 'redacted-access-token',
-      deviceUuid: device.deviceUuid,
-    );
-    expect(captured?.method, 'DELETE');
-    expect(captured?.data, const {'confirmation': 'REMOVE'});
-  });
+      expect((captured.first.data as Map)['parameters'], isEmpty);
+      expect(
+        (captured.last.data as Map)['confirmation'],
+        'PHYSICALLY_CONFIRMED',
+      );
+    },
+  );
 
   testWidgets(
     'device setup asks for a name and directs profile selection to settings',
