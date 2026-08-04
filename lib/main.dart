@@ -15,6 +15,7 @@ import 'package:algaguard_mobile_app/src/algae_profiles.dart';
 import 'package:algaguard_mobile_app/src/algae_profiles_screen.dart';
 import 'package:algaguard_mobile_app/src/organization_access_screen.dart';
 import 'package:algaguard_mobile_app/src/persistent_auth.dart';
+import 'package:algaguard_mobile_app/src/theme.dart';
 import 'package:algaguard_mobile_app/src/push_notifications.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -161,10 +162,9 @@ class _AlgaGuardAppState extends ConsumerState<AlgaGuardApp>
       navigatorKey: rootNavigatorKey,
       scaffoldMessengerKey: rootScaffoldMessengerKey,
       title: 'AlgaGuard',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff087b72)),
-        useMaterial3: true,
-      ),
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.system,
       routes: {
         '/': (_) => const SplashScreen(),
         '/login': (_) => const LoginScreen(),
@@ -235,31 +235,37 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     } else if (state == PersistentAuthState.signedOut) {
       _navigate('/login');
     }
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const AlgaGuardBrandLogo(size: 180, withWordmark: true),
-            const SizedBox(height: 20),
-            if (state == PersistentAuthState.checking)
-              const CircularProgressIndicator()
-            else if (state == PersistentAuthState.unavailable) ...[
-              const Text('Your saved session could not be refreshed yet.'),
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: () {
-                  _navigationScheduled = false;
-                  ref.read(authSessionProvider).restore();
-                },
-                child: const Text('Retry securely'),
-              ),
-              TextButton(
-                onPressed: () => _navigate('/login'),
-                child: const Text('Sign in again'),
-              ),
+    // The wordmark's artwork is dark ink on transparent, so the splash
+    // screen stays on the light theme regardless of the system setting.
+    return Theme(
+      data: AppTheme.light,
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const AlgaGuardBrandLogo(size: 180, withWordmark: true),
+              const SizedBox(height: 20),
+              if (state == PersistentAuthState.checking)
+                const CircularProgressIndicator()
+              else if (state == PersistentAuthState.unavailable) ...[
+                const Text('Your saved session could not be refreshed yet.'),
+                const SizedBox(height: 12),
+                FilledButton(
+                  onPressed: () {
+                    _navigationScheduled = false;
+                    ref.read(authSessionProvider).restore();
+                  },
+                  child: const Text('Retry securely'),
+                ),
+                TextButton(
+                  onPressed: () => _navigate('/login'),
+                  child: const Text('Sign in again'),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
