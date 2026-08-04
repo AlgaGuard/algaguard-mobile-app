@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 class FakeBle implements BleProvisioner {
   String? receivedPassword;
   String? receivedSessionToken;
+  String? receivedBindingGrant;
   @override
   Future<void> provision({
     required String serviceId,
@@ -19,6 +20,7 @@ class FakeBle implements BleProvisioner {
   }) async {
     receivedPassword = password;
     receivedSessionToken = sessionToken;
+    receivedBindingGrant = bindingGrant;
   }
 }
 
@@ -105,6 +107,39 @@ void main() {
         () => BleProtocol.wifiCredentials('s' * 33, 'password'),
         throwsFormatException,
       );
+    },
+  );
+
+  test(
+    'a same-session retry after a failed attempt still presents the '
+    'binding grant, not null',
+    () async {
+      final session = ProvisioningSession(
+        sessionId: '50000000-0000-4000-8000-000000000001',
+        deviceId: 'AG-000001',
+        expiresAt: DateTime.utc(2030),
+        sessionToken: 'x' * 32,
+        bindingGrant: 'g' * 194,
+      );
+      await expectLater(
+        ProvisioningController(FailingBle()).provision(
+          QrClaim.parse(raw, now: DateTime.utc(2029)),
+          session,
+          'ssid',
+          'password',
+        ),
+        throwsStateError,
+      );
+      expect(session.retainsBindingGrant, true);
+
+      final retryBle = FakeBle();
+      await ProvisioningController(retryBle).provision(
+        QrClaim.parse(raw, now: DateTime.utc(2029)),
+        session,
+        'ssid',
+        'password',
+      );
+      expect(retryBle.receivedBindingGrant, 'g' * 194);
     },
   );
 }

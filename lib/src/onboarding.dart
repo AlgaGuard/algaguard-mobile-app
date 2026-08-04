@@ -54,11 +54,12 @@ class ProvisioningSession {
     _bindingGrant = null;
   }
 
-  String? takeBindingGrant() {
-    final value = _bindingGrant;
-    _bindingGrant = null;
-    return value;
-  }
+  // Mirrors takeToken(): read without consuming. The BLE provisioning screen
+  // offers a same-session retry button specifically so a transient BLE
+  // failure doesn't force a fresh QR scan; nulling this on first read broke
+  // that retry silently on the very next attempt (grant reads null),
+  // regardless of whether the first attempt succeeded or failed.
+  String? takeBindingGrant() => _bindingGrant;
 
   bool get retainsToken => _sessionToken != null;
   bool get retainsBindingGrant => _bindingGrant != null;
@@ -221,11 +222,22 @@ class ProvisioningController {
         onStatus: onStatus,
       );
       stage = ProvisioningStage.completed;
+      // The session is fully consumed on success: clear it along with the
+      // password.
+      clear();
     } catch (_) {
       stage = ProvisioningStage.failed;
+      // Forget this controller's own references, and always wipe the
+      // password regardless of outcome, but do NOT clear the underlying
+      // session here: a failed BLE attempt (a dropped connection, a GATT
+      // hiccup) shouldn't burn the still-valid, unexpired session. The
+      // caller creates a fresh ProvisioningController per retry and reuses
+      // the same session, so leaving it intact is what makes "just try
+      // again" actually retry instead of always failing on an already-empty
+      // session.
+      _password = null;
+      _session = null;
       rethrow;
-    } finally {
-      clear();
     }
   }
 }

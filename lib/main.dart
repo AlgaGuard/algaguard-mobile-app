@@ -19,6 +19,7 @@ import 'package:algaguard_mobile_app/src/theme.dart';
 import 'package:algaguard_mobile_app/src/push_notifications.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -1580,6 +1581,15 @@ class _BleProvisioningScreenState extends ConsumerState<BleProvisioningScreen> {
     }
     if (error is TimeoutException) return 'BLE operation timed out';
     if (error is FormatException) return 'local provisioning data invalid';
+    if (error is PlatformException) {
+      // Covers native BLE stack failures flutter_blue_plus doesn't wrap
+      // itself, most commonly Android GATT status 133 (a well-known,
+      // usually transient radio/stack-level connection failure). Naming it
+      // instead of falling into the generic bucket makes "just retry" the
+      // obviously correct next step rather than looking like a protocol bug.
+      return 'Bluetooth connection failed at the device level (code '
+          '${error.code}) — this is usually transient, try again';
+    }
     return 'unexpected BLE operation failure';
   }
 

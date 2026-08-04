@@ -1518,6 +1518,17 @@ class FlutterBlueProvisioner implements BleProvisioner {
     }
     final device = matchingResult.device;
     await device.connect(timeout: const Duration(seconds: 15));
+    // Best-effort: a larger MTU means fewer 11-byte-header fragments for the
+    // same Wi-Fi credential payload, which means fewer sequential BLE writes
+    // that could each independently drop mid-transfer. The default
+    // unnegotiated ATT MTU (23 bytes) works but is needlessly fragile for a
+    // multi-frame write; failing to negotiate up just leaves the existing
+    // default, so this never turns a working connection into a failing one.
+    try {
+      await device.requestMtu(517).timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // Fall through with whatever MTU is already negotiated.
+    }
 
     StreamSubscription<List<int>>? statusSubscription;
     StreamSubscription<BluetoothConnectionState>? connectionSubscription;
