@@ -1955,15 +1955,78 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
   }
 
   Future<void> _load() async {
-    try {
-      final token = await _store.readAccessToken();
-      final organizationId = await _store.readSelectedOrganization();
-      if (token == null || organizationId == null) {
-        throw StateError('Authentication required');
+    final token = await _store.readAccessToken();
+    final organizationId = await _store.readSelectedOrganization();
+    if (token == null || organizationId == null) {
+      if (mounted) {
+        setState(() {
+          _error = 'Authentication required';
+          _loading = false;
+        });
       }
-      final api = PlatformApi(ref.read(environmentProvider).apiBaseUrl);
-      final device = await _resolveDevice(api, token, organizationId);
-      if (mounted) setState(() => _device = device);
+      return;
+    }
+    final api = PlatformApi(ref.read(environmentProvider).apiBaseUrl);
+    final DeviceSummary device;
+    try {
+      device = await _resolveDevice(api, token, organizationId);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _error = 'Device is unavailable.';
+          _loading = false;
+        });
+      }
+      return;
+    }
+    if (mounted) setState(() => _device = device);
+    // Real-time data and profile assignment are independent concerns -- a
+    // freshly-paired device has no telemetry yet until it has a profile
+    // installed, and a profile-service hiccup shouldn't hide readings that
+    // are already flowing. Neither one may block the other from loading or
+    // updating, so they run and fail independently rather than sharing one
+    // try/catch.
+    await Future.wait([
+      _loadTelemetry(api, token, device),
+      _loadProfileAssignment(api, token, organizationId, device),
+    ]);
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _loadTelemetry(
+    PlatformApi api,
+    String token,
+    DeviceSummary device,
+  ) async {
+    try {
+      final reading = await api.latestDemoTelemetry(
+        accessToken: token,
+        deviceUuid: device.deviceUuid,
+      );
+      if (mounted) {
+        setState(() {
+          _reading = reading;
+          _error = null;
+        });
+      }
+    } catch (_) {
+      // No telemetry yet (e.g. a freshly-paired device with no profile
+      // installed) is a normal, expected state -- it must never block the
+      // profile section from loading and never overwrite a reading already
+      // on screen with an error.
+      if (mounted && _reading == null) {
+        setState(() => _error = 'Device readings are unavailable yet.');
+      }
+    }
+  }
+
+  Future<void> _loadProfileAssignment(
+    PlatformApi api,
+    String token,
+    String organizationId,
+    DeviceSummary device,
+  ) async {
+    try {
       final profiles = await api.listProfiles(
         accessToken: token,
         organizationId: organizationId,
@@ -1980,15 +2043,16 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
       final assigned = assignedMatches.length == 1
           ? assignedMatches.single
           : null;
-      final reading = await api.latestDemoTelemetry(
-        accessToken: token,
-        deviceUuid: device.deviceUuid,
-      );
+      // Profile assignment exists to route notifications, not to gate the
+      // telemetry view -- alerts only ever come from an assigned profile
+      // evaluating whatever reading is currently on screen (or none, if
+      // nothing has loaded yet).
+      final reading = _reading;
+      final alerts = reading == null
+          ? const <AlgaeAlert>[]
+          : assigned?.configuration?.evaluate(reading) ?? const <AlgaeAlert>[];
       if (mounted) {
-        final alerts =
-            assigned?.configuration?.evaluate(reading) ?? const <AlgaeAlert>[];
         setState(() {
-          _reading = reading;
           _profiles = profiles;
           // A background refresh (e.g. a realtime telemetry tick) must not
           // clobber a profile the user has picked in the dropdown but not
@@ -2000,8 +2064,6 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
           }
           _activeProfileId = assigned?.profileId;
           _alerts = alerts;
-          _error = null;
-          _loading = false;
         });
         final signature = alerts.map((alert) => alert.parameterLabel).join('|');
         if (signature.isEmpty) {
@@ -2018,12 +2080,8 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
         }
       }
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _error = 'Device readings are unavailable.';
-          _loading = false;
-        });
-      }
+      // A profile-service hiccup must never block the telemetry view above
+      // it or clear an already-loaded profile list/selection.
     }
   }
 
