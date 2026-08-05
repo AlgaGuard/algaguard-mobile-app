@@ -21,10 +21,6 @@ class DemoTelemetryView extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      const Align(
-        alignment: Alignment.centerLeft,
-        child: Chip(label: Text('ESP32-generated development data')),
-      ),
       Text(realtimeText),
       if (reading.isStale(now))
         const Text('Data is stale', key: Key('telemetry-stale')),

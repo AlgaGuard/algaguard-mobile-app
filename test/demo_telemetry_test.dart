@@ -63,7 +63,7 @@ void main() {
     );
   });
 
-  testWidgets('view shows six values and the simulated badge', (tester) async {
+  testWidgets('view shows six values', (tester) async {
     final reading = DemoTelemetryReading.fromLatestResponse({
       'latest': sample(),
     });
@@ -80,7 +80,6 @@ void main() {
         ),
       ),
     );
-    expect(find.text('ESP32-generated development data'), findsOneWidget);
     for (final label in [
       'Temperature',
       'pH',
