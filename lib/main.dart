@@ -1885,6 +1885,7 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
   DeviceSummary? _device;
   List<ProfileSummary> _profiles = const [];
   String? _selectedProfileId;
+  String? _activeProfileId;
   List<AlgaeAlert> _alerts = const [];
   String? _lastAlertSignature;
   bool _assigningProfile = false;
@@ -1892,11 +1893,25 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
   bool _loading = true;
   String? _error;
   int _observedEventRevision = -1;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // The realtime WebSocket push is the primary update path, but this
+    // periodic refresh guarantees readings keep advancing even if that
+    // connection has silently dropped or its reconnect stalled -- the user
+    // shouldn't have to leave and re-enter the screen to see fresh data.
+    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!_assigningProfile) _load();
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
   }
 
   Future<DeviceSummary> _resolveDevice(
@@ -1950,7 +1965,15 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
         setState(() {
           _reading = reading;
           _profiles = profiles;
-          _selectedProfileId = assigned?.profileId;
+          // A background refresh (e.g. a realtime telemetry tick) must not
+          // clobber a profile the user has picked in the dropdown but not
+          // yet submitted. Only resync the selection when it still matches
+          // the last known server state.
+          if (_selectedProfileId == null ||
+              _selectedProfileId == _activeProfileId) {
+            _selectedProfileId = assigned?.profileId;
+          }
+          _activeProfileId = assigned?.profileId;
           _alerts = alerts;
           _error = null;
           _loading = false;
@@ -1984,7 +2007,7 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
     final realtime = ref.watch(realtimeControllerProvider);
     if (_observedEventRevision != realtime.eventRevision) {
       _observedEventRevision = realtime.eventRevision;
-      if (_observedEventRevision > 0) {
+      if (_observedEventRevision > 0 && !_assigningProfile) {
         WidgetsBinding.instance.addPostFrameCallback((_) => _load());
       }
     }
@@ -2119,6 +2142,7 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
       );
       if (mounted) {
         setState(() {
+          _activeProfileId = profile.profileId;
           _alerts = _reading == null
               ? const []
               : profile.configuration?.evaluate(_reading!) ?? const [];
