@@ -72,6 +72,9 @@ class TokenStore {
   Future<String?> readSelectedOrganization() =>
       storage.read(key: _selectedOrganizationKey);
 
+  Future<void> clearSelectedOrganization() =>
+      storage.delete(key: _selectedOrganizationKey);
+
   Future<String> readOrCreatePushInstallationId() async {
     final existing = await storage.read(key: _pushInstallationKey);
     if (existing != null &&

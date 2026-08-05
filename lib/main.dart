@@ -219,10 +219,35 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
       var destination = route;
       if (route == '/organizations') {
         unawaited(ref.read(pushNotificationProvider).activate());
-        final selected = await ref
-            .read(tokenStoreProvider)
-            .readSelectedOrganization();
-        if (selected != null) destination = '/home';
+        final store = ref.read(tokenStoreProvider);
+        final selected = await store.readSelectedOrganization();
+        if (selected != null) {
+          // A previously-selected organization can vanish server-side
+          // (deleted, membership revoked) while it stays cached locally --
+          // without this check we'd silently keep sending requests scoped
+          // to a dead organization forever, with no path back to the
+          // picker. Validate it against the user's actual memberships
+          // before trusting it.
+          var stillValid = false;
+          try {
+            final token = await store.readAccessToken();
+            if (token != null) {
+              final organizations = await PlatformApi(
+                ref.read(environmentProvider).apiBaseUrl,
+              ).listOrganizations(accessToken: token);
+              stillValid = organizations.any((org) => org.id == selected);
+            }
+          } catch (_) {
+            // Network/API failure: keep the cached selection rather than
+            // bouncing the user to the picker on a transient error.
+            stillValid = true;
+          }
+          if (stillValid) {
+            destination = '/home';
+          } else {
+            await store.clearSelectedOrganization();
+          }
+        }
       }
       if (mounted) Navigator.of(context).pushReplacementNamed(destination);
     });
