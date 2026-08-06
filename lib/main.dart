@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:algaguard_mobile_app/src/app_shell.dart';
 import 'package:algaguard_mobile_app/src/environment.dart';
 import 'package:algaguard_mobile_app/src/demo_telemetry.dart';
 import 'package:algaguard_mobile_app/src/demo_telemetry_view.dart';
@@ -170,7 +171,7 @@ class _AlgaGuardAppState extends ConsumerState<AlgaGuardApp>
         '/': (_) => const SplashScreen(),
         '/login': (_) => const LoginScreen(),
         '/organizations': (_) => const OrganizationScreen(),
-        '/home': (_) => const HomeScreen(),
+        '/home': (_) => const AppShell(),
         '/overview': (_) => const OverviewScreen(),
         '/alerts': (_) => const AlertsScreen(),
         '/devices': (_) => const DevicesScreen(),
@@ -534,173 +535,6 @@ class _OrganizationScreenState extends ConsumerState<OrganizationScreen> {
       ],
     ),
   );
-}
-
-class HomeScreen extends ConsumerStatefulWidget {
-  const HomeScreen({super.key});
-
-  @override
-  ConsumerState<HomeScreen> createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends ConsumerState<HomeScreen> {
-  static const _items = <(String, String, IconData, String)>[
-    (
-      'Overview',
-      'All devices across every organization you belong to.',
-      Icons.dashboard_outlined,
-      '/overview',
-    ),
-    (
-      'Devices',
-      'Manage devices in the selected organization.',
-      Icons.memory,
-      '/devices',
-    ),
-    (
-      'Device readings',
-      'View authenticated realtime and latest device readings.',
-      Icons.show_chart,
-      '/readings',
-    ),
-    (
-      'Algae Profiles',
-      'Create algae types and configure all six sensor thresholds.',
-      Icons.eco,
-      '/profiles',
-    ),
-    (
-      'Organization access',
-      'Invite users and accept or reject incoming invitations.',
-      Icons.group_add,
-      '/organization-access',
-    ),
-    (
-      'Alerts',
-      'Threshold breach history for the active organization.',
-      Icons.warning_amber_outlined,
-      '/alerts',
-    ),
-    (
-      'Development OTA status',
-      'View OTA readiness; updates are never started automatically.',
-      Icons.system_update,
-      '/ota',
-    ),
-    (
-      'Account',
-      'View account state and sign out.',
-      Icons.account_circle,
-      '/account',
-    ),
-  ];
-
-  final _store = const TokenStore(FlutterSecureStorage());
-  List<OrganizationSummary> _organizations = const [];
-  String? _selectedOrganizationId;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        ref.read(realtimeControllerProvider).start();
-      }
-    });
-    unawaited(_loadOrganizations());
-  }
-
-  Future<void> _loadOrganizations() async {
-    try {
-      final environment = ref.read(environmentProvider);
-      final token = await _store.readAccessToken();
-      if (token == null) return;
-      final results = await Future.wait<Object?>([
-        PlatformApi(
-          environment.apiBaseUrl,
-        ).listOrganizations(accessToken: token),
-        _store.readSelectedOrganization(),
-      ]);
-      if (!mounted) return;
-      setState(() {
-        _organizations = results[0]! as List<OrganizationSummary>;
-        _selectedOrganizationId = results[1] as String?;
-      });
-    } catch (_) {
-      // The switcher is a convenience; leave it hidden if it can't load.
-    }
-  }
-
-  Future<void> _switchOrganization(String organizationId) async {
-    if (organizationId == _selectedOrganizationId) return;
-    await _store.selectOrganization(organizationId);
-    if (mounted) Navigator.of(context).pushReplacementNamed('/home');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final realtime = ref.watch(realtimeControllerProvider);
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('AlgaGuard'),
-        actions: [
-          if (_organizations.length > 1)
-            PopupMenuButton<String>(
-              tooltip: 'Switch organization',
-              icon: const Icon(Icons.apartment),
-              onSelected: (value) => unawaited(_switchOrganization(value)),
-              itemBuilder: (context) => [
-                for (final organization in _organizations)
-                  PopupMenuItem(
-                    value: organization.id,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 26,
-                          child: organization.id == _selectedOrganizationId
-                              ? const Icon(Icons.check, size: 18)
-                              : null,
-                        ),
-                        Text(organization.name),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          Padding(
-            padding: EdgeInsets.all(10),
-            child: Chip(label: Text(realtime.state.visibleText)),
-          ),
-        ],
-      ),
-      body: ListView.separated(
-        padding: const EdgeInsets.all(16),
-        itemCount: _items.length + 1,
-        separatorBuilder: (_, _) => const Divider(),
-        itemBuilder: (context, index) {
-          if (index == 0) {
-            return const Card(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Text(
-                  'Live updates use one-time WebSocket tickets; HTTPS recovers authoritative state after reconnect.',
-                ),
-              ),
-            );
-          }
-          final item = _items[index - 1];
-          return ListTile(
-            leading: Icon(item.$3),
-            title: Text(item.$1),
-            subtitle: Text(item.$2),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).pushNamed(item.$4),
-          );
-        },
-      ),
-    );
-  }
 }
 
 class OverviewScreen extends ConsumerStatefulWidget {
@@ -2343,6 +2177,8 @@ class AccountScreen extends ConsumerStatefulWidget {
 class _AccountScreenState extends ConsumerState<AccountScreen> {
   final _store = const TokenStore(FlutterSecureStorage());
   OidcUserProfile? _profile;
+  List<OrganizationSummary> _organizations = const [];
+  String? _selectedOrganizationId;
   bool _loading = true;
   bool _signingOut = false;
   String? _error;
@@ -2351,6 +2187,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
   void initState() {
     super.initState();
     _loadProfile();
+    unawaited(_loadOrganizations());
   }
 
   Future<void> _loadProfile() async {
@@ -2375,6 +2212,33 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     }
   }
 
+  Future<void> _loadOrganizations() async {
+    try {
+      final environment = ref.read(environmentProvider);
+      final token = await _store.readAccessToken();
+      if (token == null) return;
+      final results = await Future.wait<Object?>([
+        PlatformApi(
+          environment.apiBaseUrl,
+        ).listOrganizations(accessToken: token),
+        _store.readSelectedOrganization(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _organizations = results[0]! as List<OrganizationSummary>;
+        _selectedOrganizationId = results[1] as String?;
+      });
+    } catch (_) {
+      // The switcher is a convenience; leave it hidden if it can't load.
+    }
+  }
+
+  Future<void> _switchOrganization(String organizationId) async {
+    if (organizationId == _selectedOrganizationId) return;
+    await _store.selectOrganization(organizationId);
+    if (mounted) Navigator.of(context).pushReplacementNamed('/home');
+  }
+
   Future<void> _signOut() async {
     setState(() => _signingOut = true);
     await ref.read(realtimeControllerProvider).stop();
@@ -2385,42 +2249,137 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Account')),
-    body: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_loading) const CircularProgressIndicator(),
-          if (_profile != null) ...[
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const CircleAvatar(child: Icon(Icons.person)),
-              title: Text(_profile!.primaryLabel),
-              subtitle: _profile!.email == null
-                  ? Text(_profile!.username ?? 'Keycloak account')
-                  : Text(_profile!.email!),
-            ),
-            const SizedBox(height: 12),
-          ],
-          if (_error != null)
-            Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          const Text(
-            'The next sign-in opens Keycloak account selection, even when a browser SSO session already exists.',
-          ),
-          const SizedBox(height: 16),
-          FilledButton.tonalIcon(
-            onPressed: _signingOut ? null : _signOut,
-            icon: const Icon(Icons.logout),
-            label: Text(_signingOut ? 'Signing out...' : 'Sign out'),
-          ),
-        ],
-      ),
+  static const _moreDestinations = <(String, String, IconData, String)>[
+    (
+      'Overview',
+      'All devices across every organization you belong to.',
+      Icons.dashboard_outlined,
+      '/overview',
     ),
+    (
+      'Device readings',
+      'View authenticated realtime and latest device readings.',
+      Icons.show_chart,
+      '/readings',
+    ),
+    (
+      'Algae Profiles',
+      'Create algae types and configure all six sensor thresholds.',
+      Icons.eco,
+      '/profiles',
+    ),
+    (
+      'Organization access',
+      'Invite users and accept or reject incoming invitations.',
+      Icons.group_add,
+      '/organization-access',
+    ),
+    (
+      'Development OTA status',
+      'View OTA readiness; updates are never started automatically.',
+      Icons.system_update,
+      '/ota',
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) => ListView(
+    padding: const EdgeInsets.all(16),
+    children: [
+      if (_loading) const Center(child: CircularProgressIndicator()),
+      if (_profile != null) ...[
+        Row(
+          children: [
+            const CircleAvatar(radius: 28, child: Icon(Icons.person, size: 28)),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _profile!.primaryLabel,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    _profile!.email ?? _profile!.username ?? 'Keycloak account',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+      ],
+      if (_error != null)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(
+            _error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ),
+      if (_organizations.length > 1) ...[
+        Text(
+          'Organization',
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Column(
+            children: [
+              for (final organization in _organizations)
+                RadioListTile<String>(
+                  value: organization.id,
+                  groupValue: _selectedOrganizationId,
+                  title: Text(organization.name),
+                  onChanged: (value) {
+                    if (value != null) unawaited(_switchOrganization(value));
+                  },
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
+      Text(
+        'More',
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      const SizedBox(height: 8),
+      Card(
+        child: Column(
+          children: [
+            for (final item in _moreDestinations)
+              ListTile(
+                leading: Icon(item.$3),
+                title: Text(item.$1),
+                subtitle: Text(item.$2),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).pushNamed(item.$4),
+              ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 20),
+      const Text(
+        'The next sign-in opens Keycloak account selection, even when a browser SSO session already exists.',
+      ),
+      const SizedBox(height: 16),
+      FilledButton.tonalIcon(
+        onPressed: _signingOut ? null : _signOut,
+        icon: const Icon(Icons.logout),
+        label: Text(_signingOut ? 'Signing out...' : 'Sign out'),
+      ),
+    ],
   );
 }
