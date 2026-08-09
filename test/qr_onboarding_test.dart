@@ -315,6 +315,6 @@ void main() {
     final source = File('lib/main.dart').readAsStringSync();
     expect(source, isNot(contains("'/scan': (_) => const ScanQrScreen()")));
     expect(source, isNot(contains("'Add device (scan QR)'")));
-    expect(source, contains("label: const Text('Scan device QR')"));
+    expect(source, contains("label: const Text('Pair device')"));
   });
 }

@@ -894,9 +894,33 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     }
   }
 
+  Future<void> _scanDeviceQr() async {
+    final authorized = await _authorizedContext();
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => QrOnboardingScanScreen(
+          api: authorized.$1,
+          accessToken: authorized.$2,
+          organizationId: authorized.$3,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Devices')),
+    // A FAB rather than a button inside the scrollable list below: pairing a
+    // new device is a core action and must stay reachable without scrolling,
+    // regardless of how many devices are already in the list.
+    floatingActionButton: qrOnboardingAvailable()
+        ? FloatingActionButton.extended(
+            onPressed: _scanDeviceQr,
+            icon: const Icon(Icons.qr_code_scanner),
+            label: const Text('Pair device'),
+          )
+        : null,
     body: RefreshIndicator(
       onRefresh: _load,
       child: ListView(
@@ -925,27 +949,11 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
               ),
             ),
           if (!_loading && _devices.isEmpty)
-            const ListTile(title: Text('No devices in this organization')),
-          if (qrOnboardingAvailable())
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: FilledButton.icon(
-                onPressed: () async {
-                  final authorized = await _authorizedContext();
-                  if (!context.mounted) return;
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => QrOnboardingScanScreen(
-                        api: authorized.$1,
-                        accessToken: authorized.$2,
-                        organizationId: authorized.$3,
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('Scan device QR'),
-              ),
+            ListTile(
+              title: const Text('No devices in this organization'),
+              subtitle: qrOnboardingAvailable()
+                  ? const Text('Tap "Pair device" below to add one')
+                  : null,
             ),
           if (!qrOnboardingAvailable() &&
               physicalSessionApprovalAvailable(releaseMode: kReleaseMode))
