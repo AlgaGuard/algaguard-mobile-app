@@ -926,7 +926,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
             ),
           if (!_loading && _devices.isEmpty)
             const ListTile(title: Text('No devices in this organization')),
-          if (qrOnboardingAvailable(releaseMode: kReleaseMode))
+          if (qrOnboardingAvailable())
             Padding(
               padding: const EdgeInsets.all(16),
               child: FilledButton.icon(
@@ -947,7 +947,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                 label: const Text('Scan device QR'),
               ),
             ),
-          if (!qrOnboardingAvailable(releaseMode: kReleaseMode) &&
+          if (!qrOnboardingAvailable() &&
               physicalSessionApprovalAvailable(releaseMode: kReleaseMode))
             Padding(
               padding: const EdgeInsets.all(16),
@@ -968,7 +968,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                 ),
               ),
             ),
-          if (!qrOnboardingAvailable(releaseMode: kReleaseMode) &&
+          if (!qrOnboardingAvailable() &&
               physicalSessionApprovalAvailable(releaseMode: kReleaseMode) &&
               _expectedOwnedPhysicalDevice != null)
             const Padding(

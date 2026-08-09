@@ -90,10 +90,9 @@ void main() {
     );
   });
 
-  test('3 release guard hides QR onboarding', () {
-    expect(qrOnboardingAvailable(releaseMode: true, enabled: true), false);
-    expect(qrOnboardingAvailable(releaseMode: false, enabled: true), true);
-    expect(qrOnboardingAvailable(releaseMode: false, enabled: false), false);
+  test('3 availability follows the build flag alone, in every build mode', () {
+    expect(qrOnboardingAvailable(enabled: true), true);
+    expect(qrOnboardingAvailable(enabled: false), false);
   });
 
   test('4 authenticated exchange sends one strict request', () async {

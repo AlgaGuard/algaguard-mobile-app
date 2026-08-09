@@ -20,15 +20,17 @@ onboarding abstraction. It creates no claim/device/ownership record, persists
 no bootstrap token, and navigates to `Development session approval`. Logout,
 restart, terminal failure, and completion discard the in-memory session.
 
-The development QR flow is compiled only with
+The QR pairing flow is compiled only with
 `ALGAGUARD_ENABLE_QR_ONBOARDING=true`. In that build, `Scan device QR` remains
 available even when the selected organization has no devices. A valid physical
 invitation is exchanged once using the authenticated organization-scoped v2
 contract; the resulting bootstrap session and binding grant remain in memory
 and feed the existing BLE provisioning controller. QR contents, session values,
-and Wi-Fi values are never displayed, persisted, or logged. Release builds hide
-the entry point, and the older owned-device/manual handoff path remains a
-disabled fallback.
+and Wi-Fi values are never displayed, persisted, or logged. Unlike the
+owned-device bootstrap recovery action above, this is the product's real
+device-onboarding flow, not a dev-only tool, so it is available in release
+builds too -- gated by the build flag alone. The older owned-device/manual
+handoff path remains a disabled fallback regardless of build mode.
 
 The authenticated organization experience includes Algae Profiles with
 operator-defined minimum and maximum values for temperature, pH, light,

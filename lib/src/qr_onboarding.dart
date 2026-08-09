@@ -5,10 +5,11 @@ const qrOnboardingEnabled = bool.fromEnvironment(
   'ALGAGUARD_ENABLE_QR_ONBOARDING',
 );
 
-bool qrOnboardingAvailable({
-  required bool releaseMode,
-  bool enabled = qrOnboardingEnabled,
-}) => enabled && !releaseMode;
+// QR pairing is the product's real device-onboarding flow (not a dev-only
+// tool like the physical session approval bootstrap reissue), so unlike
+// that one this is available in release builds too -- gated only by the
+// build-time flag, never by kReleaseMode.
+bool qrOnboardingAvailable({bool enabled = qrOnboardingEnabled}) => enabled;
 
 enum QrOnboardingScanState {
   scanning,
