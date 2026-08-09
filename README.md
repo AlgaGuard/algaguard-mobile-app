@@ -20,17 +20,21 @@ onboarding abstraction. It creates no claim/device/ownership record, persists
 no bootstrap token, and navigates to `Development session approval`. Logout,
 restart, terminal failure, and completion discard the in-memory session.
 
-The QR pairing flow is compiled only with
-`ALGAGUARD_ENABLE_QR_ONBOARDING=true`. In that build, `Scan device QR` remains
-available even when the selected organization has no devices. A valid physical
-invitation is exchanged once using the authenticated organization-scoped v2
-contract; the resulting bootstrap session and binding grant remain in memory
-and feed the existing BLE provisioning controller. QR contents, session values,
-and Wi-Fi values are never displayed, persisted, or logged. Unlike the
-owned-device bootstrap recovery action above, this is the product's real
-device-onboarding flow, not a dev-only tool, so it is available in release
-builds too -- gated by the build flag alone. The older owned-device/manual
-handoff path remains a disabled fallback regardless of build mode.
+The QR pairing flow is compiled in by default (`ALGAGUARD_ENABLE_QR_ONBOARDING`
+defaults to `true`; pass `--dart-define=ALGAGUARD_ENABLE_QR_ONBOARDING=false`
+only for a build that must explicitly disable it). The "Pair device" floating
+action button on the Devices screen is always available, even when the
+selected organization has no devices yet, and stays available after pairing
+any number of devices -- there is no per-organization device limit, so a
+customer with several tanks scans each one's QR code from the same button in
+turn. Each scan exchanges a valid physical invitation once using the
+authenticated organization-scoped v2 contract; the resulting bootstrap session
+and binding grant remain in memory and feed the existing BLE provisioning
+controller. QR contents, session values, and Wi-Fi values are never displayed,
+persisted, or logged. Unlike the owned-device bootstrap recovery action above,
+this is the product's real device-onboarding flow, not a dev-only tool, so it
+is available in release builds too. The older owned-device/manual handoff path
+remains a disabled fallback regardless of build mode.
 
 The authenticated organization experience includes Algae Profiles with
 operator-defined minimum and maximum values for temperature, pH, light,

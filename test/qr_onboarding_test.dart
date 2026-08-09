@@ -95,6 +95,12 @@ void main() {
     expect(qrOnboardingAvailable(enabled: false), false);
   });
 
+  test('3b QR pairing is on by default -- an ordinary build with no special '
+      'dart-define must still let a customer pair their own hardware', () {
+    expect(qrOnboardingEnabled, true);
+    expect(qrOnboardingAvailable(), true);
+  });
+
   test('4 authenticated exchange sends one strict request', () async {
     final now = DateTime.now().toUtc();
     var calls = 0;

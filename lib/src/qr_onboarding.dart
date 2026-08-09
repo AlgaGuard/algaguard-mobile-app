@@ -1,8 +1,13 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+// Defaults on: QR pairing is how every customer sets up their own hardware,
+// so it must work in an ordinary build with no special dart-define required.
+// The flag remains only as an explicit opt-out for a build that genuinely
+// needs it disabled (e.g. a locked-down internal QA build).
 const qrOnboardingEnabled = bool.fromEnvironment(
   'ALGAGUARD_ENABLE_QR_ONBOARDING',
+  defaultValue: true,
 );
 
 // QR pairing is the product's real device-onboarding flow (not a dev-only
