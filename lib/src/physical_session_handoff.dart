@@ -196,6 +196,38 @@ class _PhysicalSessionApprovalScreenState
     }
   }
 
+  // A pending handoff session self-heals via its own expiry timer even if
+  // this screen is force-closed, but a stray back tap mid-approval would
+  // otherwise discard it with no confirmation -- warn instead, same pattern
+  // as the other mid-flow screens.
+  Future<void> _confirmLeave() async {
+    if (widget.controller.state == PhysicalSessionApprovalState.expired) {
+      Navigator.of(context).pop();
+      return;
+    }
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cancel this approval?'),
+        content: const Text(
+          'Leaving now discards this pending session approval. The device '
+          'will need a fresh session request.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Keep going'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Leave anyway'),
+          ),
+        ],
+      ),
+    );
+    if (leave == true && mounted) Navigator.of(context).pop();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!physicalSessionApprovalAvailable(releaseMode: kReleaseMode)) {
@@ -203,35 +235,44 @@ class _PhysicalSessionApprovalScreenState
         body: Center(child: Text('Development approval unavailable')),
       );
     }
-    return Scaffold(
-      appBar: AppBar(title: const Text('Development session approval')),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            TextField(
-              controller: _userCode,
-              maxLength: 20,
-              autocorrect: false,
-              enableSuggestions: false,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(labelText: 'User code'),
-            ),
-            FilledButton(
-              onPressed:
-                  widget.controller.busy ||
-                      widget.controller.state ==
-                          PhysicalSessionApprovalState.expired
-                  ? null
-                  : _approve,
-              child: Text(widget.controller.busy ? 'Approving…' : 'Approve'),
-            ),
-            Text(_status),
-            if (widget.controller.state != PhysicalSessionApprovalState.expired)
-              Text(_countdownText),
-            if (widget.controller.state == PhysicalSessionApprovalState.expired)
-              const Text('Request a fresh development session'),
-          ],
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        unawaited(_confirmLeave());
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Development session approval')),
+        body: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            children: [
+              TextField(
+                controller: _userCode,
+                maxLength: 20,
+                autocorrect: false,
+                enableSuggestions: false,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'User code'),
+              ),
+              FilledButton(
+                onPressed:
+                    widget.controller.busy ||
+                        widget.controller.state ==
+                            PhysicalSessionApprovalState.expired
+                    ? null
+                    : _approve,
+                child: Text(widget.controller.busy ? 'Approving…' : 'Approve'),
+              ),
+              Text(_status),
+              if (widget.controller.state !=
+                  PhysicalSessionApprovalState.expired)
+                Text(_countdownText),
+              if (widget.controller.state ==
+                  PhysicalSessionApprovalState.expired)
+                const Text('Request a fresh development session'),
+            ],
+          ),
         ),
       ),
     );

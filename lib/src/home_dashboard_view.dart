@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import '../main.dart' show environmentProvider;
+import '../main.dart' show deviceRefreshSignalProvider, environmentProvider;
 import 'demo_telemetry.dart';
 import 'platform_clients.dart';
 import 'simulated_badge.dart';
@@ -28,7 +28,14 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
   DeviceSummary? _device;
   DemoTelemetryReading? _reading;
   bool _loading = true;
-  String? _error;
+  // Device list/selection failing is a real error (no organization, no
+  // network, etc.); telemetry failing to load for an otherwise-valid device
+  // is expected and unremarkable (a brand-new device has no telemetry until
+  // its first sample arrives) -- tracked separately so the latter never
+  // blanks out a device the former successfully found.
+  String? _deviceError;
+  String? _telemetryError;
+  int _lastRefreshSignal = -1;
 
   @override
   void initState() {
@@ -36,11 +43,23 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
     unawaited(_load());
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final signal = ref.watch(deviceRefreshSignalProvider);
+    if (_lastRefreshSignal != -1 && signal != _lastRefreshSignal) {
+      unawaited(_load());
+    }
+    _lastRefreshSignal = signal;
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
-      _error = null;
+      _deviceError = null;
+      _telemetryError = null;
     });
+    DeviceSummary? device;
     try {
       final token = await _store.readAccessToken();
       final organizationId = await _store.readSelectedOrganization();
@@ -52,30 +71,49 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
         accessToken: token,
         organizationId: organizationId,
       );
-      final device = devices
+      // Prefer a fully-named device over one still mid-setup (e.g. claimed
+      // but abandoned before naming) so the dashboard shows something
+      // useful even while an incomplete pairing is sitting in the list.
+      final eligible = devices
           .where((candidate) => candidate.lifecycle != 'UNCLAIMED')
-          .cast<DeviceSummary?>()
-          .firstWhere((_) => true, orElse: () => null);
-      if (device == null) {
-        if (mounted) setState(() => _loading = false);
-        return;
-      }
-      final reading = await api.latestDemoTelemetry(
-        accessToken: token,
-        deviceUuid: device.deviceUuid,
+          .toList(growable: false);
+      device = eligible.cast<DeviceSummary?>().firstWhere(
+        (candidate) => candidate?.displayName != null,
+        orElse: () => eligible.isEmpty ? null : eligible.first,
       );
       if (!mounted) return;
       setState(() {
         _device = device;
-        _reading = reading;
         _loading = false;
       });
     } catch (_) {
       if (mounted) {
         setState(() {
-          _error = 'Live telemetry is unavailable right now.';
+          _deviceError = 'Your devices are unavailable right now.';
           _loading = false;
         });
+      }
+      return;
+    }
+    if (device == null) return;
+    try {
+      final token = await _store.readAccessToken();
+      if (token == null) return;
+      final api = PlatformApi(ref.read(environmentProvider).apiBaseUrl);
+      final reading = await api.latestDemoTelemetry(
+        accessToken: token,
+        deviceUuid: device.deviceUuid,
+      );
+      if (mounted) setState(() => _reading = reading);
+    } catch (_) {
+      // Expected for a device with no samples yet -- leave _reading null
+      // and let the hero card show a "waiting for data" state instead of
+      // treating this as a dashboard-wide failure.
+      if (mounted) {
+        setState(
+          () => _telemetryError =
+              'Waiting for the first reading from this device.',
+        );
       }
     }
   }
@@ -85,6 +123,101 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
     if (hour < 12) return 'Good morning';
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
+  }
+
+  List<Widget> _buildDeviceSection(
+    BuildContext context,
+    ColorScheme scheme,
+    ParamColors params,
+  ) {
+    final device = _device!;
+    final reading = _reading;
+    return [
+      _HeroCard(device: device, reading: reading),
+      if (device.displayName == null) ...[
+        const SizedBox(height: 8),
+        Card(
+          color: scheme.surfaceContainerHighest,
+          child: ListTile(
+            leading: const Icon(Icons.edit_outlined),
+            title: const Text('Finish setting up this device'),
+            subtitle: const Text('Give it a name from Devices'),
+            onTap: () => Navigator.of(context).pushNamed('/devices'),
+          ),
+        ),
+      ] else if (_telemetryError != null) ...[
+        const SizedBox(height: 8),
+        Text(
+          _telemetryError!,
+          style: TextStyle(color: scheme.onSurfaceVariant),
+        ),
+      ],
+      const SizedBox(height: 20),
+      Text(
+        'Sensor readings',
+        style: Theme.of(
+          context,
+        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      const SizedBox(height: 10),
+      if (reading == null)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'No readings yet -- they will appear here once this device reports its first sample.',
+              style: TextStyle(color: scheme.onSurfaceVariant),
+            ),
+          ),
+        )
+      else
+        GridView.count(
+          crossAxisCount: 2,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          childAspectRatio: 1.5,
+          children: [
+            _SensorTile(
+              icon: Icons.thermostat,
+              color: params.temperature,
+              label: 'Temperature',
+              value: '${reading.temperatureC.toStringAsFixed(1)} °C',
+            ),
+            _SensorTile(
+              icon: Icons.science_outlined,
+              color: params.ph,
+              label: 'pH',
+              value: reading.ph.toStringAsFixed(2),
+            ),
+            _SensorTile(
+              icon: Icons.wb_sunny_outlined,
+              color: params.light,
+              label: 'Light intensity',
+              value: '${reading.lightLux.toStringAsFixed(0)} lux',
+            ),
+            _SensorTile(
+              icon: Icons.eco_outlined,
+              color: params.nitrate,
+              label: 'Nitrate',
+              value: '${reading.nitrateMgL.toStringAsFixed(2)} mg/L',
+            ),
+            _SensorTile(
+              icon: Icons.opacity,
+              color: params.phosphate,
+              label: 'Phosphate',
+              value: '${reading.phosphateMgL.toStringAsFixed(2)} mg/L',
+            ),
+            _SensorTile(
+              icon: Icons.grain,
+              color: params.potassium,
+              label: 'Potassium',
+              value: '${reading.potassiumMgL.toStringAsFixed(2)} mg/L',
+            ),
+          ],
+        ),
+    ];
   }
 
   @override
@@ -113,77 +246,33 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
               padding: EdgeInsets.symmetric(vertical: 32),
               child: Center(child: CircularProgressIndicator()),
             )
-          else if (_error != null)
+          else if (_deviceError != null)
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text(_error!),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_deviceError!),
+                    const SizedBox(height: 8),
+                    OutlinedButton(
+                      onPressed: _load,
+                      child: const Text('Try again'),
+                    ),
+                  ],
+                ),
               ),
             )
-          else if (_device == null || _reading == null)
+          else if (_device == null)
             const Card(
               child: Padding(
                 padding: EdgeInsets.all(16),
                 child: Text('Pair a device to see live readings here.'),
               ),
             )
-          else ...[
-            _HeroCard(device: _device!, reading: _reading!),
-            const SizedBox(height: 20),
-            Text(
-              'Sensor readings',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 10),
-            GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 1.5,
-              children: [
-                _SensorTile(
-                  icon: Icons.thermostat,
-                  color: params.temperature,
-                  label: 'Temperature',
-                  value: '${_reading!.temperatureC.toStringAsFixed(1)} °C',
-                ),
-                _SensorTile(
-                  icon: Icons.science_outlined,
-                  color: params.ph,
-                  label: 'pH',
-                  value: _reading!.ph.toStringAsFixed(2),
-                ),
-                _SensorTile(
-                  icon: Icons.wb_sunny_outlined,
-                  color: params.light,
-                  label: 'Light intensity',
-                  value: '${_reading!.lightLux.toStringAsFixed(0)} lux',
-                ),
-                _SensorTile(
-                  icon: Icons.eco_outlined,
-                  color: params.nitrate,
-                  label: 'Nitrate',
-                  value: '${_reading!.nitrateMgL.toStringAsFixed(2)} mg/L',
-                ),
-                _SensorTile(
-                  icon: Icons.opacity,
-                  color: params.phosphate,
-                  label: 'Phosphate',
-                  value: '${_reading!.phosphateMgL.toStringAsFixed(2)} mg/L',
-                ),
-                _SensorTile(
-                  icon: Icons.grain,
-                  color: params.potassium,
-                  label: 'Potassium',
-                  value: '${_reading!.potassiumMgL.toStringAsFixed(2)} mg/L',
-                ),
-              ],
-            ),
-          ],
+          else if (_buildDeviceSection(context, scheme, params)
+              case final section)
+            ...section,
         ],
       ),
     );
@@ -194,12 +283,15 @@ class _HeroCard extends StatelessWidget {
   const _HeroCard({required this.device, required this.reading});
 
   final DeviceSummary device;
-  final DemoTelemetryReading reading;
+  // Null whenever this device hasn't reported a sample yet -- a normal,
+  // common state for a freshly-paired device, not an error.
+  final DemoTelemetryReading? reading;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final stale = reading.isStale(DateTime.now());
+    final reading = this.reading;
+    final stale = reading == null || reading.isStale(DateTime.now());
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -217,7 +309,7 @@ class _HeroCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                if (reading.simulated) const SimulatedBadge(),
+                if (reading?.simulated ?? false) const SimulatedBadge(),
               ],
             ),
             const SizedBox(height: 8),
@@ -230,7 +322,11 @@ class _HeroCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  stale ? 'Data is stale' : 'System is online',
+                  reading == null
+                      ? 'Waiting for first reading'
+                      : stale
+                      ? 'Data is stale'
+                      : 'System is online',
                   style: TextStyle(
                     color: stale ? scheme.error : AlgaGuardColors.statusGood,
                     fontWeight: FontWeight.w600,

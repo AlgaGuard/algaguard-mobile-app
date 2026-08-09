@@ -34,6 +34,19 @@ final tokenStoreProvider = Provider<TokenStore>(
   (_) => const TokenStore(FlutterSecureStorage()),
 );
 
+// Bumped whenever device state changes in a way that makes cached device
+// lists/telemetry stale -- a pair completes (or is abandoned mid-way, since
+// the device already exists server-side by then), a device is renamed, or a
+// device is unpaired. AppShell's tabs stay alive in an IndexedStack (by
+// design, so switching tabs doesn't re-trigger their loads), so without this
+// they had no way to notice a change made on a different screen; listen to
+// it and reload rather than polling.
+final deviceRefreshSignalProvider = StateProvider<int>((_) => 0);
+
+void notifyDeviceStateChanged(WidgetRef ref) {
+  ref.read(deviceRefreshSignalProvider.notifier).update((value) => value + 1);
+}
+
 final authSessionProvider = ChangeNotifierProvider<PersistentAuthController>((
   ref,
 ) {
@@ -756,11 +769,22 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
   bool _attempted = false;
   String? _error;
   BootstrapReissueFailureCategory? _reissueFailureCategory;
+  int _lastRefreshSignal = -1;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final signal = ref.watch(deviceRefreshSignalProvider);
+    if (_lastRefreshSignal != -1 && signal != _lastRefreshSignal) {
+      unawaited(_load());
+    }
+    _lastRefreshSignal = signal;
   }
 
   Future<(PlatformApi, String, String)> _authorizedContext() async {
@@ -873,87 +897,101 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Devices')),
-    body: ListView(
-      children: [
-        if (_loading) const LinearProgressIndicator(),
-        for (final device in _devices)
-          ListTile(
-            title: Text(device.visibleName),
-            subtitle: Text('${device.lifecycle} · authorized HTTPS state'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => DeviceDetailsScreen(device: device),
+    body: RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        children: [
+          if (_loading) const LinearProgressIndicator(),
+          for (final device in _devices)
+            ListTile(
+              title: Text(device.visibleName),
+              subtitle: device.displayName == null
+                  ? Text(
+                      'Setup incomplete · tap to finish naming this device',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    )
+                  : Text('${device.lifecycle} · authorized HTTPS state'),
+              trailing: device.displayName == null
+                  ? const Icon(Icons.warning_amber_outlined)
+                  : const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => device.displayName == null
+                      ? DeviceSetupScreen(device: device)
+                      : DeviceDetailsScreen(device: device),
+                ),
               ),
             ),
-          ),
-        if (!_loading && _devices.isEmpty)
-          const ListTile(title: Text('No devices in this organization')),
-        if (qrOnboardingAvailable(releaseMode: kReleaseMode))
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: FilledButton.icon(
-              onPressed: () async {
-                final authorized = await _authorizedContext();
-                if (!context.mounted) return;
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => QrOnboardingScanScreen(
-                      api: authorized.$1,
-                      accessToken: authorized.$2,
-                      organizationId: authorized.$3,
+          if (!_loading && _devices.isEmpty)
+            const ListTile(title: Text('No devices in this organization')),
+          if (qrOnboardingAvailable(releaseMode: kReleaseMode))
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: FilledButton.icon(
+                onPressed: () async {
+                  final authorized = await _authorizedContext();
+                  if (!context.mounted) return;
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => QrOnboardingScanScreen(
+                        api: authorized.$1,
+                        accessToken: authorized.$2,
+                        organizationId: authorized.$3,
+                      ),
                     ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.qr_code_scanner),
-              label: const Text('Scan device QR'),
-            ),
-          ),
-        if (!qrOnboardingAvailable(releaseMode: kReleaseMode) &&
-            physicalSessionApprovalAvailable(releaseMode: kReleaseMode))
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: FilledButton.icon(
-              onPressed:
-                  _preparing ||
-                      _attempted ||
-                      _expectedOwnedPhysicalDevice == null
-                  ? null
-                  : () => _preparePhysicalOnboarding(
-                      _expectedOwnedPhysicalDevice!,
-                    ),
-              icon: const Icon(Icons.developer_board),
-              label: Text(
-                _preparing
-                    ? 'Reissuing bootstrap session…'
-                    : 'Reissue development bootstrap session',
+                  );
+                },
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('Scan device QR'),
               ),
             ),
-          ),
-        if (!qrOnboardingAvailable(releaseMode: kReleaseMode) &&
-            physicalSessionApprovalAvailable(releaseMode: kReleaseMode) &&
-            _expectedOwnedPhysicalDevice != null)
+          if (!qrOnboardingAvailable(releaseMode: kReleaseMode) &&
+              physicalSessionApprovalAvailable(releaseMode: kReleaseMode))
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: FilledButton.icon(
+                onPressed:
+                    _preparing ||
+                        _attempted ||
+                        _expectedOwnedPhysicalDevice == null
+                    ? null
+                    : () => _preparePhysicalOnboarding(
+                        _expectedOwnedPhysicalDevice!,
+                      ),
+                icon: const Icon(Icons.developer_board),
+                label: Text(
+                  _preparing
+                      ? 'Reissuing bootstrap session…'
+                      : 'Reissue development bootstrap session',
+                ),
+              ),
+            ),
+          if (!qrOnboardingAvailable(releaseMode: kReleaseMode) &&
+              physicalSessionApprovalAvailable(releaseMode: kReleaseMode) &&
+              _expectedOwnedPhysicalDevice != null)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Text('Development session approval available'),
+            ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                _error!,
+                key: ValueKey(_reissueFailureCategory),
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
           const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: Text('Development session approval available'),
-          ),
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(16),
             child: Text(
-              _error!,
-              key: ValueKey(_reissueFailureCategory),
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+              'Devices shown here come only from the authorized platform API.',
             ),
           ),
-        const Padding(
-          padding: EdgeInsets.all(16),
-          child: Text(
-            'Devices shown here come only from the authorized platform API.',
-          ),
-        ),
-      ],
+        ],
+      ),
     ),
   );
 }
@@ -1478,50 +1516,94 @@ class _BleProvisioningScreenState extends ConsumerState<BleProvisioningScreen> {
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('BLE Wi-Fi provisioning')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Text(_state),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _ssid,
-          decoration: const InputDecoration(labelText: 'Wi-Fi SSID'),
+  // Like DeviceSetupScreen, this device is already claimed server-side by
+  // the time this screen exists, so backing out isn't "cancelling" -- it's
+  // leaving a claimed-but-unprovisioned device behind. Unlike the naming
+  // screen there's no local fallback we can save (Wi-Fi credentials aren't
+  // ours to invent), so this just warns clearly and lets DevicesScreen pick
+  // the device back up afterward instead of silently stranding it.
+  Future<void> _confirmLeave() async {
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Leave BLE setup?'),
+        content: const Text(
+          'This device has already been claimed by your organization. If '
+          'you leave before Wi-Fi provisioning finishes, it will stay '
+          'offline until you come back and complete setup from the Devices '
+          'tab.',
         ),
-        TextField(
-          controller: _password,
-          decoration: const InputDecoration(labelText: 'Wi-Fi password'),
-          obscureText: true,
-        ),
-        const SizedBox(height: 12),
-        FilledButton(
-          onPressed: _working ? null : _provision,
-          child: Text(_working ? 'Provisioning…' : 'Send credentials over BLE'),
-        ),
-        if (_cloudReady) ...[
-          const SizedBox(height: 8),
-          FilledButton.icon(
-            onPressed: _working ? null : _openDeviceSetup,
-            icon: const Icon(Icons.tune),
-            label: const Text('Name device and create profile'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Keep going'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Leave anyway'),
           ),
         ],
-        const SizedBox(height: 8),
-        OutlinedButton(
-          onPressed: _working ? null : _startOverWithFreshQr,
-          child: const Text('Start over with fresh QR'),
-        ),
-        if (_freshAttemptRequested)
-          const Text(
-            'The previous session was cleared locally and cannot be reused.',
+      ),
+    );
+    if (leave == true && mounted) {
+      notifyDeviceStateChanged(ref);
+      Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, _) {
+      if (didPop) return;
+      unawaited(_confirmLeave());
+    },
+    child: Scaffold(
+      appBar: AppBar(title: const Text('BLE Wi-Fi provisioning')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text(_state),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _ssid,
+            decoration: const InputDecoration(labelText: 'Wi-Fi SSID'),
           ),
-        const SizedBox(height: 12),
-        const Text(
-          'Password remains only in this form for the active BLE call and is cleared after success or failure. Real BLE requires a phone and ESP32-S3.',
-        ),
-      ],
+          TextField(
+            controller: _password,
+            decoration: const InputDecoration(labelText: 'Wi-Fi password'),
+            obscureText: true,
+          ),
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: _working ? null : _provision,
+            child: Text(
+              _working ? 'Provisioning…' : 'Send credentials over BLE',
+            ),
+          ),
+          if (_cloudReady) ...[
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: _working ? null : _openDeviceSetup,
+              icon: const Icon(Icons.tune),
+              label: const Text('Name device and create profile'),
+            ),
+          ],
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: _working ? null : _startOverWithFreshQr,
+            child: const Text('Start over with fresh QR'),
+          ),
+          if (_freshAttemptRequested)
+            const Text(
+              'The previous session was cleared locally and cannot be reused.',
+            ),
+          const SizedBox(height: 12),
+          const Text(
+            'Password remains only in this form for the active BLE call and is cleared after success or failure. Real BLE requires a phone and ESP32-S3.',
+          ),
+        ],
+      ),
     ),
   );
 
@@ -1564,6 +1646,7 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
   final _store = const TokenStore(FlutterSecureStorage());
   late final TextEditingController _deviceName;
   bool _saving = false;
+  bool _leaving = false;
   String? _error;
 
   @override
@@ -1572,12 +1655,19 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
     _deviceName = TextEditingController(text: widget.device.displayName ?? '');
   }
 
-  Future<void> _save() async {
-    if (_saving) return;
-    final deviceName = _deviceName.text.trim();
+  // By the time this screen exists the device is already real server-side
+  // (claimed via QR/BLE) -- there is no "cancel claim" API, so leaving
+  // without a name previously abandoned a nameless-but-functional device
+  // that the rest of the app had no good way to show. Saving a fallback
+  // name here (instead of nothing) means every exit path leaves a device
+  // the user can actually find and finish naming later, never one that
+  // just silently vanishes into a broken-looking state.
+  Future<bool> _save({String? fallbackName}) async {
+    if (_saving) return false;
+    final deviceName = fallbackName ?? _deviceName.text.trim();
     if (deviceName.isEmpty) {
       setState(() => _error = 'Enter a device name.');
-      return;
+      return false;
     }
     setState(() {
       _saving = true;
@@ -1595,15 +1685,8 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
         deviceUuid: widget.device.deviceUuid,
         displayName: deviceName,
       );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Device name saved. Select its Algae Profile from device settings.',
-          ),
-        ),
-      );
-      Navigator.of(context).pushNamedAndRemoveUntil('/devices', (_) => false);
+      notifyDeviceStateChanged(ref);
+      return true;
     } catch (_) {
       if (mounted) {
         setState(
@@ -1611,9 +1694,63 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
               'Device setup was not saved. Check your owner/admin access and retry.',
         );
       }
+      return false;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<void> _saveAndLeave() async {
+    if (!await _save()) return;
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Device name saved. Select its Algae Profile from device settings.',
+        ),
+      ),
+    );
+    // '/home' (AppShell), not '/devices' -- the latter is a standalone
+    // screen with no bottom nav and no route back into the tab shell short
+    // of an app restart, which left users stranded after a successful
+    // save/unpair.
+    Navigator.of(context).pushNamedAndRemoveUntil('/home', (_) => false);
+  }
+
+  Future<void> _confirmLeaveWithoutNaming() async {
+    if (_leaving) return;
+    final choice = await showDialog<_LeaveSetupChoice>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Leave without naming?'),
+        content: const Text(
+          'This device has already been added to your organization. If you '
+          'leave now it will keep a placeholder name until you rename it '
+          'from the Devices tab.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(
+              dialogContext,
+            ).pop(_LeaveSetupChoice.keepSettingUp),
+            child: const Text('Keep setting up'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(_LeaveSetupChoice.leaveAnyway),
+            child: const Text('Leave anyway'),
+          ),
+        ],
+      ),
+    );
+    if (choice != _LeaveSetupChoice.leaveAnyway || !mounted) return;
+    setState(() => _leaving = true);
+    // Best-effort: if this also fails, notifyDeviceStateChanged still runs
+    // below so the rest of the app at least knows to refresh and show the
+    // device (with lifecycle/id visible) rather than staying stale.
+    await _save(fallbackName: widget.device.deviceId);
+    notifyDeviceStateChanged(ref);
+    if (mounted) Navigator.of(context).pop();
   }
 
   @override
@@ -1623,38 +1760,47 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Set up device')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        TextField(
-          key: const Key('device-name-field'),
-          controller: _deviceName,
-          maxLength: 64,
-          decoration: const InputDecoration(labelText: 'Device name'),
-        ),
-        const Text(
-          'After saving, select an existing Algae Profile from the device page. Create profiles from the Algae Profiles menu.',
-        ),
-        const SizedBox(height: 12),
-        FilledButton(
-          key: const Key('save-device-setup'),
-          onPressed: _saving ? null : _save,
-          child: Text(_saving ? 'Saving…' : 'Save device setup'),
-        ),
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, _) {
+      if (didPop) return;
+      unawaited(_confirmLeaveWithoutNaming());
+    },
+    child: Scaffold(
+      appBar: AppBar(title: const Text('Set up device')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          TextField(
+            key: const Key('device-name-field'),
+            controller: _deviceName,
+            maxLength: 64,
+            decoration: const InputDecoration(labelText: 'Device name'),
           ),
-      ],
+          const Text(
+            'After saving, select an existing Algae Profile from the device page. Create profiles from the Algae Profiles menu.',
+          ),
+          const SizedBox(height: 12),
+          FilledButton(
+            key: const Key('save-device-setup'),
+            onPressed: _saving || _leaving ? null : _saveAndLeave,
+            child: Text(_saving ? 'Saving…' : 'Save device setup'),
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
+        ],
+      ),
     ),
   );
 }
+
+enum _LeaveSetupChoice { keepSettingUp, leaveAnyway }
 
 class DeviceReadingsScreen extends ConsumerStatefulWidget {
   const DeviceReadingsScreen({super.key});
@@ -2111,7 +2257,12 @@ class _DeviceDetailsScreenState extends ConsumerState<DeviceDetailsScreen> {
       ).requestPhysicalUnpair(accessToken: token, device: device);
       if (!mounted) return;
       if (outcome == PhysicalUnpairOutcome.completed) {
-        Navigator.of(context).pushNamedAndRemoveUntil('/devices', (_) => false);
+        notifyDeviceStateChanged(ref);
+        // '/home' (AppShell), not '/devices' -- the latter is a standalone
+        // screen with no bottom nav and no route back into the tab shell
+        // short of an app restart, which left users stranded after a
+        // successful save/unpair.
+        Navigator.of(context).pushNamedAndRemoveUntil('/home', (_) => false);
         return;
       }
       final message = switch (outcome) {
@@ -2327,9 +2478,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       if (_organizations.length > 1) ...[
         Text(
           'Organization',
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w700,
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
         Card(
