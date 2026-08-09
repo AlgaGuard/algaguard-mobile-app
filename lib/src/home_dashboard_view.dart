@@ -264,10 +264,13 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
               ),
             )
           else if (_device == null)
-            const Card(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('Pair a device to see live readings here.'),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.add_circle_outline),
+                title: const Text('Pair a device to see live readings here'),
+                subtitle: const Text('Go to Devices to add one'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).pushNamed('/devices'),
               ),
             )
           else if (_buildDeviceSection(context, scheme, params)
