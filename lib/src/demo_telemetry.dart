@@ -56,8 +56,8 @@ class DemoTelemetryReading {
       throw const FormatException('Invalid telemetry time');
     }
     final flags = flagsValue.whereType<String>().toSet();
-    if (!flags.contains('SIMULATED')) {
-      throw const FormatException('Demo telemetry must be simulated');
+    if (flags.isEmpty) {
+      throw const FormatException('Telemetry sample has no quality flags');
     }
     return DemoTelemetryReading(
       sequence: sequence,
@@ -66,7 +66,7 @@ class DemoTelemetryReading {
       ph: ph,
       lightLux: requiredNumber('lightLux', nonNegative: true),
       nutrientPercent: requiredNumber('nutrientPercent', nonNegative: true),
-      simulated: true,
+      simulated: flags.contains('SIMULATED'),
     );
   }
 
