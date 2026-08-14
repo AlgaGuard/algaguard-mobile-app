@@ -32,6 +32,12 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
   DeviceSummary? _device;
   DemoTelemetryReading? _reading;
   bool _loading = true;
+  // Only the very first load should blank the page behind a spinner.
+  // Realtime-triggered and pull-to-refresh reloads happen every few
+  // seconds once data is flowing -- they must update the on-screen values
+  // in place rather than repeatedly discarding and rebuilding the whole
+  // device section.
+  bool _hasLoadedOnce = false;
   // Device list/selection failing is a real error (no organization, no
   // network, etc.); telemetry failing to load for an otherwise-valid device
   // is expected and unremarkable (a brand-new device has no telemetry until
@@ -59,8 +65,10 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
   }
 
   Future<void> _load() async {
+    final isInitialLoad = !_hasLoadedOnce;
+    _hasLoadedOnce = true;
     setState(() {
-      _loading = true;
+      if (isInitialLoad) _loading = true;
       _deviceError = null;
       _telemetryError = null;
     });
