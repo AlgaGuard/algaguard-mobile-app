@@ -33,7 +33,7 @@ abstract final class AlgaGuardColors {
 
 }
 
-/// Six telemetry-parameter icon colors, validated with the dataviz skill's
+/// Four telemetry-parameter icon colors, validated with the dataviz skill's
 /// validate_palette.js against both this theme's light and dark surfaces.
 /// Mirrors algaguard-web-dashboard/src/styles.css's --param-*-fg tokens
 /// (light) and their dark-mode overrides. Never reuse purple here -- it is
@@ -45,35 +45,27 @@ class ParamColors extends ThemeExtension<ParamColors> {
     required this.temperature,
     required this.ph,
     required this.light,
-    required this.nitrate,
-    required this.phosphate,
-    required this.potassium,
+    required this.nutrient,
   });
 
   static const light_ = ParamColors(
     temperature: Color(0xffeb6834),
     ph: Color(0xff2a78d6),
     light: Color(0xffeda100),
-    nitrate: Color(0xff1baf7a),
-    phosphate: Color(0xffe87ba4),
-    potassium: Color(0xff4a3aa7),
+    nutrient: Color(0xff1baf7a),
   );
 
   static const dark_ = ParamColors(
     temperature: Color(0xffd95926),
     ph: Color(0xff3987e5),
     light: Color(0xffc98500),
-    nitrate: Color(0xff199e70),
-    phosphate: Color(0xffd55181),
-    potassium: Color(0xff9085e9),
+    nutrient: Color(0xff199e70),
   );
 
   final Color temperature;
   final Color ph;
   final Color light;
-  final Color nitrate;
-  final Color phosphate;
-  final Color potassium;
+  final Color nutrient;
 
   /// The pastel circle background behind an icon of [fg], blended toward
   /// [surface] the same way the web dashboard computes it via CSS color-mix.
@@ -85,16 +77,12 @@ class ParamColors extends ThemeExtension<ParamColors> {
     Color? temperature,
     Color? ph,
     Color? light,
-    Color? nitrate,
-    Color? phosphate,
-    Color? potassium,
+    Color? nutrient,
   }) => ParamColors(
     temperature: temperature ?? this.temperature,
     ph: ph ?? this.ph,
     light: light ?? this.light,
-    nitrate: nitrate ?? this.nitrate,
-    phosphate: phosphate ?? this.phosphate,
-    potassium: potassium ?? this.potassium,
+    nutrient: nutrient ?? this.nutrient,
   );
 
   @override
@@ -104,9 +92,7 @@ class ParamColors extends ThemeExtension<ParamColors> {
       temperature: Color.lerp(temperature, other.temperature, t)!,
       ph: Color.lerp(ph, other.ph, t)!,
       light: Color.lerp(light, other.light, t)!,
-      nitrate: Color.lerp(nitrate, other.nitrate, t)!,
-      phosphate: Color.lerp(phosphate, other.phosphate, t)!,
-      potassium: Color.lerp(potassium, other.potassium, t)!,
+      nutrient: Color.lerp(nutrient, other.nutrient, t)!,
     );
   }
 }

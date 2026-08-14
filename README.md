@@ -38,7 +38,7 @@ remains a disabled fallback regardless of build mode.
 
 The authenticated organization experience includes Algae Profiles with
 operator-defined minimum and maximum values for temperature, pH, light,
-nitrate, phosphate, and potassium. Profiles use immutable versions and may be
+and nutrient value percentage. Profiles use immutable versions and may be
 assigned from each device page; assignment also queues the existing guarded
 profile-configuration command. The device live-feed page refreshes from
 authenticated realtime events and raises deduplicated in-app threshold alerts.

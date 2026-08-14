@@ -12,15 +12,13 @@ Map<String, Object> sample({DateTime? at}) => {
     'temperatureC': 24.1,
     'ph': 7.1,
     'lightLux': 900,
-    'nitrateMgL': 2.4,
-    'phosphateMgL': 0.35,
-    'potassiumMgL': 1.8,
+    'nutrientPercent': 63.4,
   },
   'qualityFlags': ['SIMULATED'],
 };
 
 void main() {
-  test('latest response decodes all six values', () {
+  test('latest response decodes all four values', () {
     final reading = DemoTelemetryReading.fromLatestResponse({
       'latest': sample(),
     });
@@ -29,11 +27,9 @@ void main() {
         reading.temperatureC,
         reading.ph,
         reading.lightLux,
-        reading.nitrateMgL,
-        reading.phosphateMgL,
-        reading.potassiumMgL,
+        reading.nutrientPercent,
       ],
-      [24.1, 7.1, 900, 2.4, 0.35, 1.8],
+      [24.1, 7.1, 900, 63.4],
     );
   });
 
@@ -56,14 +52,14 @@ void main() {
 
   test('negative concentrations and invalid pH are rejected', () {
     final invalid = sample();
-    invalid['values'] = {...invalid['values']! as Map, 'nitrateMgL': -1};
+    invalid['values'] = {...invalid['values']! as Map, 'nutrientPercent': -1};
     expect(
       () => DemoTelemetryReading.fromLatestResponse({'latest': invalid}),
       throwsFormatException,
     );
   });
 
-  testWidgets('view shows six values', (tester) async {
+  testWidgets('view shows four values', (tester) async {
     final reading = DemoTelemetryReading.fromLatestResponse({
       'latest': sample(),
     });
@@ -84,9 +80,7 @@ void main() {
       'Temperature',
       'pH',
       'Light intensity',
-      'Nitrate',
-      'Phosphate',
-      'Potassium',
+      'Nutrient value percentage',
     ]) {
       expect(find.text(label), findsOneWidget);
     }

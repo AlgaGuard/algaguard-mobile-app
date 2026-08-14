@@ -272,7 +272,7 @@ class _AlgaeProfilesScreenState extends State<AlgaeProfilesScreen> {
               subtitle: Text(
                 profile.configuration == null
                     ? 'Thresholds not configured'
-                    : 'Six sensor thresholds configured · version ${profile.version}',
+                    : 'Four sensor thresholds configured · version ${profile.version}',
               ),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,

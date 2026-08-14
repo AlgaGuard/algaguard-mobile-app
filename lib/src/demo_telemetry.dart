@@ -5,9 +5,7 @@ class DemoTelemetryReading {
     required this.temperatureC,
     required this.ph,
     required this.lightLux,
-    required this.nitrateMgL,
-    required this.phosphateMgL,
-    required this.potassiumMgL,
+    required this.nutrientPercent,
     required this.simulated,
   });
 
@@ -67,9 +65,7 @@ class DemoTelemetryReading {
       temperatureC: requiredNumber('temperatureC'),
       ph: ph,
       lightLux: requiredNumber('lightLux', nonNegative: true),
-      nitrateMgL: requiredNumber('nitrateMgL', nonNegative: true),
-      phosphateMgL: requiredNumber('phosphateMgL', nonNegative: true),
-      potassiumMgL: requiredNumber('potassiumMgL', nonNegative: true),
+      nutrientPercent: requiredNumber('nutrientPercent', nonNegative: true),
       simulated: true,
     );
   }
@@ -79,9 +75,7 @@ class DemoTelemetryReading {
   final double temperatureC;
   final double ph;
   final double lightLux;
-  final double nitrateMgL;
-  final double phosphateMgL;
-  final double potassiumMgL;
+  final double nutrientPercent;
   final bool simulated;
 
   bool isStale(

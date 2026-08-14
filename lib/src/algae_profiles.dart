@@ -11,9 +11,7 @@ const algaeParameters = <AlgaeParameter>[
   AlgaeParameter('temperatureC', 'Temperature', 'C'),
   AlgaeParameter('ph', 'pH', 'pH'),
   AlgaeParameter('lightLux', 'Light intensity', 'lux'),
-  AlgaeParameter('nitrateMgL', 'Nitrate', 'mg/L'),
-  AlgaeParameter('phosphateMgL', 'Phosphate', 'mg/L'),
-  AlgaeParameter('potassiumMgL', 'Potassium', 'mg/L'),
+  AlgaeParameter('nutrientPercent', 'Nutrient value', '%'),
 ];
 
 class AlgaeThreshold {
@@ -77,9 +75,7 @@ class AlgaeProfileConfiguration {
       'temperatureC': reading.temperatureC,
       'ph': reading.ph,
       'lightLux': reading.lightLux,
-      'nitrateMgL': reading.nitrateMgL,
-      'phosphateMgL': reading.phosphateMgL,
-      'potassiumMgL': reading.potassiumMgL,
+      'nutrientPercent': reading.nutrientPercent,
     };
     return [
       for (final parameter in algaeParameters)

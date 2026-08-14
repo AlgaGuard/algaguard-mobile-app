@@ -2423,7 +2423,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     ),
     (
       'Algae Profiles',
-      'Create algae types and configure all six sensor thresholds.',
+      'Create algae types and configure all four sensor thresholds.',
       Icons.eco,
       '/profiles',
     ),

@@ -9,34 +9,28 @@ import 'demo_telemetry.dart';
 import 'platform_clients.dart';
 import 'theme.dart';
 
-enum _Param { temperature, ph, light, nitrate, phosphate, potassium }
+enum _Param { temperature, ph, light, nutrient }
 
 extension on _Param {
   String get label => switch (this) {
     _Param.temperature => 'Temperature',
     _Param.ph => 'pH',
     _Param.light => 'Light',
-    _Param.nitrate => 'Nitrate',
-    _Param.phosphate => 'Phosphate',
-    _Param.potassium => 'Potassium',
+    _Param.nutrient => 'Nutrient value percentage',
   };
 
   double value(DemoTelemetryReading reading) => switch (this) {
     _Param.temperature => reading.temperatureC,
     _Param.ph => reading.ph,
     _Param.light => reading.lightLux,
-    _Param.nitrate => reading.nitrateMgL,
-    _Param.phosphate => reading.phosphateMgL,
-    _Param.potassium => reading.potassiumMgL,
+    _Param.nutrient => reading.nutrientPercent,
   };
 
   Color color(ParamColors params) => switch (this) {
     _Param.temperature => params.temperature,
     _Param.ph => params.ph,
     _Param.light => params.light,
-    _Param.nitrate => params.nitrate,
-    _Param.phosphate => params.phosphate,
-    _Param.potassium => params.potassium,
+    _Param.nutrient => params.nutrient,
   };
 }
 

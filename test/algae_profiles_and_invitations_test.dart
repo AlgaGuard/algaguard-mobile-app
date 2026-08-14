@@ -10,12 +10,12 @@ AlgaeProfileConfiguration configuration() => AlgaeProfileConfiguration({
 });
 
 void main() {
-  test('Algae Profile requires all six thresholds and evaluates breaches', () {
+  test('Algae Profile requires all four thresholds and evaluates breaches', () {
     final profile = configuration();
-    expect(profile.thresholds.length, 6);
+    expect(profile.thresholds.length, 4);
     expect(
       AlgaeProfileConfiguration.fromJson(profile.toJson()).thresholds.length,
-      6,
+      4,
     );
     final alerts = profile.evaluate(
       DemoTelemetryReading(
@@ -24,9 +24,7 @@ void main() {
         temperatureC: 11,
         ph: 7,
         lightLux: 7,
-        nitrateMgL: 7,
-        phosphateMgL: 7,
-        potassiumMgL: 7,
+        nutrientPercent: 7,
         simulated: true,
       ),
     );
@@ -90,7 +88,7 @@ void main() {
       expect(requests, hasLength(3));
       expect(
         (requests.first.data as Map)['configuration']['parameters'],
-        hasLength(6),
+        hasLength(4),
       );
       expect(requests[1].path, contains('profile-assignment'));
       expect(requests.last.path, contains('/commands'));

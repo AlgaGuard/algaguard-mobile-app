@@ -3,7 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import '../main.dart' show deviceRefreshSignalProvider, environmentProvider;
+import '../main.dart'
+    show
+        deviceRefreshSignalProvider,
+        environmentProvider,
+        realtimeControllerProvider;
 import 'demo_telemetry.dart';
 import 'platform_clients.dart';
 import 'simulated_badge.dart';
@@ -11,7 +15,7 @@ import 'theme.dart';
 
 /// The app's dashboard-style Home tab: a greeting, the realtime connection
 /// state, a hero card for the organization's primary device, and a grid of
-/// its six latest sensor readings. Reuses PlatformApi.latestDemoTelemetry
+/// its four latest sensor readings. Reuses PlatformApi.latestDemoTelemetry
 /// (and therefore DemoTelemetryReading's parsing/validation) rather than
 /// duplicating any fetch or parsing logic -- DemoTelemetryView (the flat
 /// list presentation on the device detail screen) and this dashboard are
@@ -36,6 +40,7 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
   String? _deviceError;
   String? _telemetryError;
   int _lastRefreshSignal = -1;
+  int _observedEventRevision = -1;
 
   @override
   void initState() {
@@ -199,21 +204,9 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
             ),
             _SensorTile(
               icon: Icons.eco_outlined,
-              color: params.nitrate,
-              label: 'Nitrate',
-              value: '${reading.nitrateMgL.toStringAsFixed(2)} mg/L',
-            ),
-            _SensorTile(
-              icon: Icons.opacity,
-              color: params.phosphate,
-              label: 'Phosphate',
-              value: '${reading.phosphateMgL.toStringAsFixed(2)} mg/L',
-            ),
-            _SensorTile(
-              icon: Icons.grain,
-              color: params.potassium,
-              label: 'Potassium',
-              value: '${reading.potassiumMgL.toStringAsFixed(2)} mg/L',
+              color: params.nutrient,
+              label: 'Nutrient value percentage',
+              value: '${reading.nutrientPercent.toStringAsFixed(1)}%',
             ),
           ],
         ),
@@ -222,6 +215,13 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
 
   @override
   Widget build(BuildContext context) {
+    final realtime = ref.watch(realtimeControllerProvider);
+    if (_observedEventRevision != realtime.eventRevision) {
+      _observedEventRevision = realtime.eventRevision;
+      if (_observedEventRevision > 0 && !_loading) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+      }
+    }
     final params = Theme.of(context).extension<ParamColors>()!;
     final scheme = Theme.of(context).colorScheme;
     return RefreshIndicator(

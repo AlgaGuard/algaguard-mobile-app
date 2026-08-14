@@ -11,9 +11,7 @@ Map<String, Object?> sample({double temperatureC = 24.1}) => {
     'temperatureC': temperatureC,
     'ph': 7.1,
     'lightLux': 900,
-    'nitrateMgL': 2.4,
-    'phosphateMgL': 0.35,
-    'potassiumMgL': 1.8,
+    'nutrientPercent': 63.4,
   },
   'qualityFlags': ['SIMULATED'],
 };

@@ -27,9 +27,10 @@ class DemoTelemetryView extends StatelessWidget {
       _value('Temperature', '${reading.temperatureC.toStringAsFixed(2)} °C'),
       _value('pH', reading.ph.toStringAsFixed(2)),
       _value('Light intensity', '${reading.lightLux.toStringAsFixed(0)} lux'),
-      _value('Nitrate', '${reading.nitrateMgL.toStringAsFixed(2)} mg/L'),
-      _value('Phosphate', '${reading.phosphateMgL.toStringAsFixed(2)} mg/L'),
-      _value('Potassium', '${reading.potassiumMgL.toStringAsFixed(2)} mg/L'),
+      _value(
+        'Nutrient value percentage',
+        '${reading.nutrientPercent.toStringAsFixed(1)}%',
+      ),
       Text('Last updated ${reading.generatedAt.toLocal()}'),
     ],
   );
