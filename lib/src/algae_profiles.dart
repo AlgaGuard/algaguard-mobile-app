@@ -1,10 +1,19 @@
 import 'demo_telemetry.dart';
 
 class AlgaeParameter {
-  const AlgaeParameter(this.key, this.label, this.unit);
+  const AlgaeParameter(
+    this.key,
+    this.label,
+    this.unit, {
+    this.optional = false,
+  });
   final String key;
   final String label;
   final String unit;
+
+  /// Optional thresholds may be left blank. The nutrient estimates are
+  /// optional so profiles saved before they existed still load.
+  final bool optional;
 }
 
 const algaeParameters = <AlgaeParameter>[
@@ -12,7 +21,28 @@ const algaeParameters = <AlgaeParameter>[
   AlgaeParameter('ph', 'pH', 'pH'),
   AlgaeParameter('lightLux', 'Light intensity', 'lux'),
   AlgaeParameter('nutrientPercent', 'Nutrient value', '%'),
+  AlgaeParameter('nitrateMgL', 'Nitrate (estimated)', 'mg/L', optional: true),
+  AlgaeParameter(
+    'phosphateMgL',
+    'Phosphate (experimental estimate)',
+    'mg/L',
+    optional: true,
+  ),
+  AlgaeParameter(
+    'potassiumMgL',
+    'Potassium (experimental estimate)',
+    'mg/L',
+    optional: true,
+  ),
 ];
+
+/// Human-readable name for a parameter key, e.g. in a server alert record.
+String algaeParameterLabel(String key) {
+  for (final parameter in algaeParameters) {
+    if (parameter.key == key) return parameter.label;
+  }
+  return key;
+}
 
 class AlgaeThreshold {
   const AlgaeThreshold({required this.minimum, required this.maximum});
@@ -50,6 +80,7 @@ class AlgaeProfileConfiguration {
     final parsed = <String, AlgaeThreshold>{};
     for (final parameter in algaeParameters) {
       final threshold = parameters[parameter.key];
+      if (threshold == null && parameter.optional) continue;
       if (threshold is! Map) {
         throw const FormatException('Missing algae threshold');
       }
@@ -71,16 +102,21 @@ class AlgaeProfileConfiguration {
   };
 
   List<AlgaeAlert> evaluate(DemoTelemetryReading reading) {
-    final values = <String, double>{
+    final values = <String, double?>{
       'temperatureC': reading.temperatureC,
       'ph': reading.ph,
       'lightLux': reading.lightLux,
       'nutrientPercent': reading.nutrientPercent,
+      'nitrateMgL': reading.nitrateMgL,
+      'phosphateMgL': reading.phosphateMgL,
+      'potassiumMgL': reading.potassiumMgL,
     };
     return [
       for (final parameter in algaeParameters)
-        if (values[parameter.key]! < thresholds[parameter.key]!.minimum ||
-            values[parameter.key]! > thresholds[parameter.key]!.maximum)
+        if ((values[parameter.key], thresholds[parameter.key]) case (
+          final double value,
+          final AlgaeThreshold threshold,
+        ) when value < threshold.minimum || value > threshold.maximum)
           AlgaeAlert(parameter.label),
     ];
   }

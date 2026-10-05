@@ -91,7 +91,8 @@ class _AlgaeProfilesScreenState extends State<AlgaeProfilesScreen> {
                   ),
                 ),
                 const Text(
-                  'Enter operator-selected limits. These values are not scientific recommendations.',
+                  'Enter operator-selected limits. These values are not scientific recommendations. '
+                  'Nutrient estimate limits are optional; phosphate and potassium estimates are experimental.',
                 ),
                 for (final parameter in algaeParameters)
                   Row(
@@ -153,8 +154,13 @@ class _AlgaeProfilesScreenState extends State<AlgaeProfilesScreen> {
       final normalizedName = name.text.trim();
       final thresholds = <String, AlgaeThreshold>{};
       for (final parameter in algaeParameters) {
-        final minimum = double.tryParse(fields[parameter.key]!.$1.text.trim());
-        final maximum = double.tryParse(fields[parameter.key]!.$2.text.trim());
+        final minimumText = fields[parameter.key]!.$1.text.trim();
+        final maximumText = fields[parameter.key]!.$2.text.trim();
+        if (parameter.optional && minimumText.isEmpty && maximumText.isEmpty) {
+          continue;
+        }
+        final minimum = double.tryParse(minimumText);
+        final maximum = double.tryParse(maximumText);
         if (minimum == null ||
             maximum == null ||
             !minimum.isFinite ||

@@ -6,7 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 AlgaeProfileConfiguration configuration() => AlgaeProfileConfiguration({
   for (final parameter in algaeParameters)
-    parameter.key: const AlgaeThreshold(minimum: 1, maximum: 10),
+    if (!parameter.optional)
+      parameter.key: const AlgaeThreshold(minimum: 1, maximum: 10),
 });
 
 void main() {
@@ -31,6 +32,52 @@ void main() {
     expect(alerts.single.parameterLabel, 'Temperature');
     expect(alerts.single.safeMessage, isNot(contains('11')));
   });
+
+  test(
+    'nutrient estimate thresholds are optional and raise their own alerts',
+    () {
+      final withEstimates = AlgaeProfileConfiguration({
+        ...configuration().thresholds,
+        'potassiumMgL': const AlgaeThreshold(minimum: 20, maximum: 35),
+      });
+      final reloaded = AlgaeProfileConfiguration.fromJson(
+        withEstimates.toJson(),
+      );
+      expect(reloaded.thresholds.keys, contains('potassiumMgL'));
+      expect(reloaded.thresholds.keys, isNot(contains('nitrateMgL')));
+
+      final alerts = reloaded.evaluate(
+        DemoTelemetryReading(
+          sequence: '1',
+          generatedAt: DateTime.now().toUtc(),
+          temperatureC: 5,
+          ph: 7,
+          lightLux: 7,
+          nutrientPercent: 7,
+          simulated: false,
+          nitrateMgL: 999,
+          potassiumMgL: 38.2,
+        ),
+      );
+      // Nitrate has no threshold set, so only potassium alerts.
+      expect(alerts.single.parameterLabel, 'Potassium (experimental estimate)');
+
+      final noEstimate = reloaded.evaluate(
+        DemoTelemetryReading(
+          sequence: '2',
+          generatedAt: DateTime.now().toUtc(),
+          temperatureC: 5,
+          ph: 7,
+          lightLux: 7,
+          nutrientPercent: 7,
+          simulated: false,
+        ),
+      );
+      expect(noEstimate, isEmpty);
+      expect(algaeParameterLabel('nitrateMgL'), 'Nitrate (estimated)');
+      expect(algaeParameterLabel('unknownKey'), 'unknownKey');
+    },
+  );
 
   test(
     'profile creation and device assignment use authenticated APIs',

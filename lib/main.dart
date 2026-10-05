@@ -736,7 +736,9 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
               Icons.warning_amber_outlined,
               color: Theme.of(context).colorScheme.error,
             ),
-            title: Text('${alert.deviceId} · ${alert.parameter}'),
+            title: Text(
+              '${alert.deviceId} · ${algaeParameterLabel(alert.parameter)}',
+            ),
             subtitle: Text(
               alert.direction == 'HIGH'
                   ? '${alert.value} above maximum ${alert.maximum ?? '—'}'

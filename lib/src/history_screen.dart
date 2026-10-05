@@ -9,7 +9,7 @@ import 'demo_telemetry.dart';
 import 'platform_clients.dart';
 import 'theme.dart';
 
-enum _Param { temperature, ph, light, nutrient }
+enum _Param { temperature, ph, light, nutrient, nitrate, phosphate, potassium }
 
 extension on _Param {
   String get label => switch (this) {
@@ -17,20 +17,39 @@ extension on _Param {
     _Param.ph => 'pH',
     _Param.light => 'Light',
     _Param.nutrient => 'Nutrient value percentage',
+    _Param.nitrate => 'Nitrate (estimated)',
+    _Param.phosphate => 'Phosphate (experimental)',
+    _Param.potassium => 'Potassium (experimental)',
   };
 
-  double value(DemoTelemetryReading reading) => switch (this) {
+  /// Null when this sample has no value for the parameter -- estimates are
+  /// omitted when the device's reading is outside the model's range.
+  double? value(DemoTelemetryReading reading) => switch (this) {
     _Param.temperature => reading.temperatureC,
     _Param.ph => reading.ph,
     _Param.light => reading.lightLux,
     _Param.nutrient => reading.nutrientPercent,
+    _Param.nitrate => reading.nitrateMgL,
+    _Param.phosphate => reading.phosphateMgL,
+    _Param.potassium => reading.potassiumMgL,
   };
+
+  bool get isEstimate =>
+      this == _Param.nitrate ||
+      this == _Param.phosphate ||
+      this == _Param.potassium;
+
+  bool get isExperimental =>
+      this == _Param.phosphate || this == _Param.potassium;
 
   Color color(ParamColors params) => switch (this) {
     _Param.temperature => params.temperature,
     _Param.ph => params.ph,
     _Param.light => params.light,
-    _Param.nutrient => params.nutrient,
+    _Param.nutrient ||
+    _Param.nitrate ||
+    _Param.phosphate ||
+    _Param.potassium => params.nutrient,
   };
 }
 
@@ -108,7 +127,10 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   Widget build(BuildContext context) {
     final params = Theme.of(context).extension<ParamColors>()!;
     final color = _selected.color(params);
-    final values = _samples.map(_selected.value).toList(growable: false);
+    final values = _samples
+        .map(_selected.value)
+        .whereType<double>()
+        .toList(growable: false);
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -139,11 +161,33 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                 ),
             ],
           ),
+          if (_selected.isEstimate) ...[
+            const SizedBox(height: 8),
+            Text(
+              _selected.isExperimental
+                  ? 'Experimental estimate in mg/L, calculated on the device. '
+                        'Not a measurement; do not use it for dosing decisions.'
+                  : 'Estimate in mg/L, calculated on the device from pH. '
+                        'Not a measurement.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           if (_error != null) Text(_error!),
           Expanded(
             child: values.length < 2
-                ? const Center(child: Text('Collecting live samples…'))
+                ? Center(
+                    child: Text(
+                      _selected.isEstimate &&
+                              _samples.length >= 2 &&
+                              values.isEmpty
+                          ? 'This device has not sent this estimate yet.'
+                          : 'Collecting live samples…',
+                    ),
+                  )
                 : Card(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(8, 20, 20, 12),
