@@ -7,6 +7,9 @@ class DemoTelemetryReading {
     required this.lightLux,
     required this.nutrientPercent,
     required this.simulated,
+    this.nitrateMgL,
+    this.phosphateMgL,
+    this.potassiumMgL,
   });
 
   factory DemoTelemetryReading.fromLatestResponse(Map<String, dynamic> root) {
@@ -49,6 +52,15 @@ class DemoTelemetryReading {
       return value.toDouble();
     }
 
+    // Model estimates are optional: the device omits one when its input is
+    // outside the model's training range, and older firmware never sends them.
+    double? optionalEstimate(String name) {
+      final value = values[name];
+      return value is num && value.isFinite && value >= 0
+          ? value.toDouble()
+          : null;
+    }
+
     final ph = requiredNumber('ph', nonNegative: true);
     if (ph > 14) throw const FormatException('Invalid telemetry value');
     final generatedAt = DateTime.tryParse(observedAt)?.toUtc();
@@ -67,6 +79,9 @@ class DemoTelemetryReading {
       lightLux: requiredNumber('lightLux', nonNegative: true),
       nutrientPercent: requiredNumber('nutrientPercent', nonNegative: true),
       simulated: flags.contains('SIMULATED'),
+      nitrateMgL: optionalEstimate('nitrateMgL'),
+      phosphateMgL: optionalEstimate('phosphateMgL'),
+      potassiumMgL: optionalEstimate('potassiumMgL'),
     );
   }
 
@@ -77,6 +92,18 @@ class DemoTelemetryReading {
   final double lightLux;
   final double nutrientPercent;
   final bool simulated;
+
+  /// Estimated on the device from pH. Not a measurement.
+  final double? nitrateMgL;
+
+  /// Experimental estimate from pH. Not a measurement.
+  final double? phosphateMgL;
+
+  /// Experimental estimate from temperature. Not a measurement.
+  final double? potassiumMgL;
+
+  bool get hasNutrientEstimates =>
+      nitrateMgL != null || phosphateMgL != null || potassiumMgL != null;
 
   bool isStale(
     DateTime now, {

@@ -218,8 +218,59 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
             ),
           ],
         ),
+      if (reading != null && reading.hasNutrientEstimates) ...[
+        const SizedBox(height: 20),
+        Text(
+          'Nutrient estimates',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Calculated on the device from pH and temperature, not measured. '
+          'Phosphate and potassium are experimental and should not be used '
+          'for dosing decisions.',
+          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 10),
+        GridView.count(
+          crossAxisCount: 2,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          childAspectRatio: 1.5,
+          children: [
+            _SensorTile(
+              icon: Icons.water_drop_outlined,
+              color: params.nutrient,
+              label: 'Nitrate (N), estimated',
+              value: _estimateText(reading.nitrateMgL),
+              badge: 'Estimate',
+            ),
+            _SensorTile(
+              icon: Icons.grain,
+              color: params.nutrient,
+              label: 'Phosphate (P), estimated',
+              value: _estimateText(reading.phosphateMgL),
+              badge: _experimental,
+            ),
+            _SensorTile(
+              icon: Icons.bubble_chart_outlined,
+              color: params.nutrient,
+              label: 'Potassium (K), estimated',
+              value: _estimateText(reading.potassiumMgL),
+              badge: _experimental,
+            ),
+          ],
+        ),
+      ],
     ];
   }
+
+  static String _estimateText(double? value) =>
+      value == null ? 'Out of range' : '${value.toStringAsFixed(1)} mg/L';
 
   @override
   Widget build(BuildContext context) {
@@ -358,12 +409,16 @@ class _SensorTile extends StatelessWidget {
     required this.color,
     required this.label,
     required this.value,
+    this.badge,
   });
 
   final IconData icon;
   final Color color;
   final String label;
   final String value;
+
+  /// Short status shown top-right, e.g. "Experimental".
+  final String? badge;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -372,18 +427,26 @@ class _SensorTile extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: Color.lerp(
-                Theme.of(context).colorScheme.surface,
-                color,
-                0.18,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: Color.lerp(
+                    Theme.of(context).colorScheme.surface,
+                    color,
+                    0.18,
+                  ),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 18, color: color),
               ),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, size: 18, color: color),
+              const Spacer(),
+              if (badge != null)
+                _Badge(text: badge!, warning: badge == _experimental),
+            ],
           ),
           const Spacer(),
           Text(
@@ -401,4 +464,42 @@ class _SensorTile extends StatelessWidget {
       ),
     ),
   );
+}
+
+const _experimental = 'Experimental';
+
+class _Badge extends StatelessWidget {
+  const _Badge({required this.text, required this.warning});
+
+  final String text;
+
+  /// Amber for experimental values, neutral otherwise.
+  final bool warning;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final background = warning
+        ? (dark ? const Color(0xff3a2d10) : const Color(0xfffdf1d6))
+        : scheme.surfaceContainerHighest;
+    final foreground = warning
+        ? (dark ? const Color(0xfff2c46a) : const Color(0xff8a5a00))
+        : scheme.onSurfaceVariant;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w600,
+          color: foreground,
+        ),
+      ),
+    );
+  }
 }

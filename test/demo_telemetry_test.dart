@@ -33,6 +33,37 @@ void main() {
     );
   });
 
+  test('nutrient estimates decode when present and stay null when absent', () {
+    final withEstimates = sample();
+    withEstimates['values'] = {
+      ...withEstimates['values']! as Map,
+      'nitrateMgL': 68.61,
+      'phosphateMgL': 9.81,
+      'potassiumMgL': 26.79,
+    };
+    final reading = DemoTelemetryReading.fromLatestResponse({
+      'latest': withEstimates,
+    });
+    expect(reading.nitrateMgL, 68.61);
+    expect(reading.phosphateMgL, 9.81);
+    expect(reading.potassiumMgL, 26.79);
+    expect(reading.hasNutrientEstimates, isTrue);
+
+    final older = DemoTelemetryReading.fromLatestResponse({'latest': sample()});
+    expect(older.nitrateMgL, isNull);
+    expect(older.hasNutrientEstimates, isFalse);
+  });
+
+  test('an invalid estimate is dropped without rejecting the sample', () {
+    final invalid = sample();
+    invalid['values'] = {...invalid['values']! as Map, 'nitrateMgL': -3};
+    final reading = DemoTelemetryReading.fromLatestResponse({
+      'latest': invalid,
+    });
+    expect(reading.nitrateMgL, isNull);
+    expect(reading.ph, 7.1);
+  });
+
   test('realtime event decodes only the authoritative schema', () {
     final reading = DemoTelemetryReading.fromRealtimeEvent({
       'schema': 'urn:algaguard:schema:websocket:telemetry-updated:v1-1',
