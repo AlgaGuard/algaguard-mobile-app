@@ -2494,18 +2494,20 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
         ),
         const SizedBox(height: 8),
         Card(
-          child: Column(
-            children: [
-              for (final organization in _organizations)
-                RadioListTile<String>(
-                  value: organization.id,
-                  groupValue: _selectedOrganizationId,
-                  title: Text(organization.name),
-                  onChanged: (value) {
-                    if (value != null) unawaited(_switchOrganization(value));
-                  },
-                ),
-            ],
+          child: RadioGroup<String>(
+            groupValue: _selectedOrganizationId,
+            onChanged: (value) {
+              if (value != null) unawaited(_switchOrganization(value));
+            },
+            child: Column(
+              children: [
+                for (final organization in _organizations)
+                  RadioListTile<String>(
+                    value: organization.id,
+                    title: Text(organization.name),
+                  ),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 20),

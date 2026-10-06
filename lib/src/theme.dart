@@ -30,7 +30,6 @@ abstract final class AlgaGuardColors {
   static const purple50 = Color(0xfff4effc);
   static const purple500 = Color(0xff7c4fd6);
   static const purple700 = Color(0xff5b32ad);
-
 }
 
 /// Four telemetry-parameter icon colors, validated with the dataviz skill's
