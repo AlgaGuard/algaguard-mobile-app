@@ -164,7 +164,17 @@ abstract final class AppTheme {
       ),
       chipTheme: ChipThemeData(
         backgroundColor: scheme.surfaceContainerHighest,
-        labelStyle: TextStyle(color: scheme.onSurface),
+        // Without an explicit selected colour a selected chip falls back to
+        // the dark secondary colour, leaving its dark label unreadable.
+        selectedColor: scheme.primary,
+        checkmarkColor: scheme.onPrimary,
+        labelStyle: TextStyle(
+          color: WidgetStateColor.resolveWith(
+            (states) => states.contains(WidgetState.selected)
+                ? scheme.onPrimary
+                : scheme.onSurface,
+          ),
+        ),
         side: BorderSide(color: scheme.outline),
       ),
       navigationBarTheme: NavigationBarThemeData(

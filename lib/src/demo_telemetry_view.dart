@@ -31,7 +31,16 @@ class DemoTelemetryView extends StatelessWidget {
         'Nutrient value percentage',
         '${reading.nutrientPercent.toStringAsFixed(1)}%',
       ),
-      Text('Last updated ${reading.generatedAt.toLocal()}'),
+      Text('Last updated ${_timestamp(reading.generatedAt)}'),
     ],
   );
+}
+
+/// Local time to the second ("2026-10-07 15:12:38"), not DateTime's default
+/// string with microseconds.
+String _timestamp(DateTime value) {
+  final local = value.toLocal();
+  String two(int part) => part.toString().padLeft(2, '0');
+  return '${local.year}-${two(local.month)}-${two(local.day)} '
+      '${two(local.hour)}:${two(local.minute)}:${two(local.second)}';
 }

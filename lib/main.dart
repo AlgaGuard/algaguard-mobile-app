@@ -114,7 +114,8 @@ final realtimeControllerProvider =
           ];
         },
       );
-      ref.onDispose(controller.dispose);
+      // ChangeNotifierProvider disposes the controller itself; disposing it
+      // here as well threw "used after being disposed" on scope teardown.
       return controller;
     });
 
