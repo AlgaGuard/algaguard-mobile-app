@@ -184,13 +184,7 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
           ),
         )
       else
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 1.5,
+        _TileGrid(
           children: [
             _SensorTile(
               icon: Icons.thermostat,
@@ -234,13 +228,7 @@ class _HomeDashboardViewState extends ConsumerState<HomeDashboardView> {
           style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
         ),
         const SizedBox(height: 10),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 1.5,
+        _TileGrid(
           children: [
             _SensorTile(
               icon: Icons.water_drop_outlined,
@@ -443,11 +431,26 @@ class _SensorTile extends StatelessWidget {
                 ),
                 child: Icon(icon, size: 18, color: color),
               ),
-              const Spacer(),
-              if (badge != null)
-                _Badge(text: badge!, warning: badge == _experimental),
+              if (badge != null) ...[
+                const SizedBox(width: 8),
+                // Shrinks rather than overflowing beside the icon on very
+                // narrow tiles.
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.topRight,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: _Badge(
+                        text: badge!,
+                        warning: badge == _experimental,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
+          const SizedBox(height: 12),
           const Spacer(),
           Text(
             value,
@@ -467,6 +470,38 @@ class _SensorTile extends StatelessWidget {
 }
 
 const _experimental = 'Experimental';
+
+/// Two tiles per row. Each row is as tall as its taller tile's content; the
+/// fixed-aspect GridView it replaces cut tiles off ("BOTTOM OVERFLOWED") on
+/// narrow phones and with larger font sizes.
+class _TileGrid extends StatelessWidget {
+  const _TileGrid({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      for (var index = 0; index < children.length; index += 2) ...[
+        if (index > 0) const SizedBox(height: 12),
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: children[index]),
+              const SizedBox(width: 12),
+              Expanded(
+                child: index + 1 < children.length
+                    ? children[index + 1]
+                    : const SizedBox.shrink(),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ],
+  );
+}
 
 class _Badge extends StatelessWidget {
   const _Badge({required this.text, required this.warning});

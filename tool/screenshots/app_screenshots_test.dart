@@ -633,4 +633,78 @@ void main() {
     await _shot(tester, '11_team_invitations');
     await _tearDown(tester);
   });
+
+  // "Fits every phone" check: render every screen on narrow and short
+  // phones and with a larger font. Any RenderFlex overflow (the yellow and
+  // black "BOTTOM OVERFLOWED BY n PIXELS" stripe) fails the test.
+  const phones = <(String, Size, double, double)>[
+    ('realme_360x785', Size(720, 1570), 2.0, 1.0),
+    ('small_360x640', Size(720, 1280), 2.0, 1.0),
+    ('small_large_text', Size(720, 1280), 2.0, 1.3),
+    ('compact_320x640', Size(640, 1280), 2.0, 1.0),
+  ];
+  for (final (name, size, ratio, textScale) in phones) {
+    void phone(WidgetTester tester) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = ratio;
+      tester.platformDispatcher.textScaleFactorTestValue = textScale;
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      debugDisableShadows = false;
+    }
+
+    Future<void> scrolledShots(WidgetTester tester, String screen) async {
+      await _shot(tester, 'fit/$name/${screen}_top');
+      final scrollables = find.byType(Scrollable);
+      if (scrollables.evaluate().isNotEmpty) {
+        await tester.drag(scrollables.first, const Offset(0, -3000));
+        await _settle(tester, frames: 5);
+        await _shot(tester, 'fit/$name/${screen}_bottom');
+      }
+    }
+
+    testWidgets('fits $name: tabs', (tester) async {
+      phone(tester);
+      await tester.pumpWidget(_app(const AppShell()));
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(seconds: 8));
+      }
+      await _settle(tester);
+      await scrolledShots(tester, 'home');
+      for (final tab in ['Devices', 'History', 'Alerts', 'Profile']) {
+        await tester.tap(find.text(tab).last);
+        await _settle(tester);
+        await scrolledShots(tester, tab.toLowerCase());
+      }
+      await _tearDown(tester);
+    });
+
+    testWidgets('fits $name: other screens', (tester) async {
+      phone(tester);
+      for (final (screen, widget) in <(String, Widget)>[
+        (
+          'device_details',
+          DeviceDetailsScreen(device: DeviceSummary.fromJson(_tankA)),
+        ),
+        (
+          'algae_profiles',
+          AlgaeProfilesScreen(apiBaseUrl: Uri.parse('https://api.test/v1')),
+        ),
+        ('organizations', const OrganizationScreen()),
+        (
+          'invitations',
+          OrganizationAccessScreen(
+            apiBaseUrl: Uri.parse('https://api.test/v1'),
+          ),
+        ),
+      ]) {
+        await tester.pumpWidget(_app(widget));
+        await _settle(tester, frames: 30);
+        await scrolledShots(tester, screen);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump(const Duration(seconds: 1));
+      }
+      await _tearDown(tester);
+    });
+  }
 }
